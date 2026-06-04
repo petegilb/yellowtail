@@ -52,6 +52,31 @@ FetchContent_Declare(SDL3_shadercross
 )
 FetchContent_MakeAvailable(SDL3_shadercross)
 
+# --- Dear ImGui (docking branch) with SDL3 + SDL_GPU backends ---
+# ImGui ships no CMakeLists.txt for consumers, so we build our own static lib
+# from the core sources + the two backend files we actually use.
+FetchContent_Declare(imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG v1.92.8-docking
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(imgui)
+
+add_library(imgui STATIC
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_demo.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp
+)
+target_include_directories(imgui PUBLIC
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
+)
+target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
+
 # --- enet (zpl-c fork) ---
 FetchContent_Declare(enet
         GIT_REPOSITORY https://github.com/zpl-c/enet.git
@@ -69,6 +94,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         SDL3::SDL3-static
         SDL3_image::SDL3_image-static
         SDL3_shadercross::SDL3_shadercross-static
+        imgui
         enet::enet_static
 )
 
