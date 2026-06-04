@@ -58,6 +58,8 @@ SDL_Texture* tex = IMG_LoadTexture(renderer, path.c_str());
 
 ## Shaders (SDL_gpu via SDL_shadercross)
 
+Some info on shadercross: https://moonside.games/posts/introducing-sdl-shadercross/
+
 `SDL_gpu` is built into SDL3 itself — no extra dependency for the GPU API. But each backend wants a different shader format (Vulkan→SPIR-V, D3D12→DXIL, Metal→MSL). SDL_shadercross translates from HLSL or SPIR-V into whatever the active backend needs at runtime:
 
 ```cpp
