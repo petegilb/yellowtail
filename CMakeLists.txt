@@ -38,6 +38,20 @@ FetchContent_Declare(SDL3_image
 )
 FetchContent_MakeAvailable(SDL3_image)
 
+# --- SDL3_shadercross (HLSL/SPIR-V -> SPIR-V/DXIL/MSL at runtime) ---
+set(SDLSHADERCROSS_SHARED OFF CACHE BOOL "" FORCE)
+set(SDLSHADERCROSS_STATIC ON  CACHE BOOL "" FORCE)
+set(SDLSHADERCROSS_SPIRVCROSS_SHARED OFF CACHE BOOL "" FORCE)
+set(SDLSHADERCROSS_VENDORED ON  CACHE BOOL "" FORCE)
+set(SDLSHADERCROSS_DXC      ON  CACHE BOOL "" FORCE)
+set(SDLSHADERCROSS_CLI      OFF CACHE BOOL "" FORCE)
+set(SDLSHADERCROSS_INSTALL  OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(SDL3_shadercross
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL_shadercross.git
+        GIT_TAG 1d8b0556eefb11a77bc9c28249d16f7a3e0459e9
+)
+FetchContent_MakeAvailable(SDL3_shadercross)
+
 # --- enet (zpl-c fork) ---
 FetchContent_Declare(enet
         GIT_REPOSITORY https://github.com/zpl-c/enet.git
@@ -54,6 +68,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(${PROJECT_NAME} PRIVATE
         SDL3::SDL3-static
         SDL3_image::SDL3_image-static
+        SDL3_shadercross::SDL3_shadercross-static
         enet::enet_static
 )
 
