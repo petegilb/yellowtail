@@ -85,6 +85,14 @@ FetchContent_Declare(enet
 )
 FetchContent_MakeAvailable(enet)
 
+# --- GLM (header-only graphics math) ---
+FetchContent_Declare(glm
+        GIT_REPOSITORY https://github.com/g-truc/glm.git
+        GIT_TAG 1.0.1
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(glm)
+
 # --- Jolt Physics ---
 # Jolt's Build/CMakeLists.txt mutates global CMAKE_CXX_FLAGS (adds -fno-rtti,
 # -fno-exceptions, /WX, etc.). Save/restore the flag string so the rest of
@@ -127,6 +135,14 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         imgui
         enet::enet_static
         Jolt
+        glm::glm
+)
+
+# GLM defaults to OpenGL's [-1, 1] clip-space Z; SDL_GPU (Vulkan/D3D12/Metal) wants [0, 1].
+# Applying this everywhere keeps perspectiveRH/orthoRH and friends honest.
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+        GLM_ENABLE_EXPERIMENTAL
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PROJECT_NAME})

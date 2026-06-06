@@ -1,6 +1,6 @@
 # yellowtail
 
-Cross-platform C++20 starter using SDL3 (windowing / input / audio / 2D + GPU rendering), SDL3_image (texture loading), SDL_shadercross (runtime HLSL → SPIR-V / DXIL / MSL), Dear ImGui (debug UI), zpl-c/enet (UDP networking), Jolt Physics (rigid-body simulation), and cgltf (glTF 2.0 models). All dependencies are fetched and built from source via CMake `FetchContent` — no system packages required. Builds on Windows (MSVC / MinGW), Linux, and macOS from a single `CMakeLists.txt`.
+Cross-platform C++20 starter using SDL3 (windowing / input / audio / 2D + GPU rendering), SDL3_image (texture loading), SDL_shadercross (runtime HLSL → SPIR-V / DXIL / MSL), Dear ImGui (debug UI), zpl-c/enet (UDP networking), Jolt Physics (rigid-body simulation), GLM (graphics math), and cgltf (glTF 2.0 models). All dependencies are fetched and built from source via CMake `FetchContent` — no system packages required. Builds on Windows (MSVC / MinGW), Linux, and macOS from a single `CMakeLists.txt`.
 
 ## Build
 
@@ -41,6 +41,7 @@ yellowtail/
 | [Dear ImGui](https://github.com/ocornut/imgui) | `v1.92.8-docking` | Immediate-mode debug UI (overlays, dev tools, editors) | The standard for in-game debug UI. Docking branch adds dockable / detachable windows. Built with the `imgui_impl_sdl3` + `imgui_impl_sdlgpu3` backends so it draws through the same `SDL_gpu` device as the rest of the scene. |
 | [zpl-c/enet](https://github.com/zpl-c/enet) | `v2.6.5` | Reliable UDP networking | Modernized fork of lsalzman/enet with a clean CMake target. Ships `ws2_32` linkage on Windows automatically. |
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | `v5.5.0` | Rigid-body physics (collision, constraints, vehicles, ragdolls) | Modern, fast, multithreaded, used in Horizon Forbidden West. Header-light public API, no exceptions/RTTI, single static lib (`Jolt`). Consumed via `SOURCE_SUBDIR Build` per upstream's integration guide. |
+| [GLM](https://github.com/g-truc/glm) | `1.0.1` | Graphics math (vec/mat/quat, projection helpers) | Header-only, GLSL-style API — most online graphics tutorials and Vulkan/SDL_GPU samples use it. Despite the "GL" name, it's just C++ linear algebra with no runtime dependency on OpenGL; we use it with `SDL_GPU`. Build defines `GLM_FORCE_DEPTH_ZERO_TO_ONE` (Vulkan/D3D12/Metal clip-space Z) and `GLM_ENABLE_EXPERIMENTAL` (for `glm/gtx/*` headers tutorials reach for). |
 | [cgltf](https://github.com/jkuhlmann/cgltf) | `v1.9` | glTF 2.0 model parsing | Single-header, MIT, zero deps. glTF is the modern interchange format (Blender / Maya / Substance export it natively). |
 
 ## Loading assets
