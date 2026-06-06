@@ -1,6 +1,9 @@
 #include <iostream>
+#include <thread>
+
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
+#include <Jolt/Jolt.h>
 
 int main(int /*argc*/, char** /*argv*/) {
     std::cout << "Starting yellowtail..." << std::endl;

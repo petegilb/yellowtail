@@ -85,17 +85,48 @@ FetchContent_Declare(enet
 )
 FetchContent_MakeAvailable(enet)
 
+# --- Jolt Physics ---
+# Jolt's Build/CMakeLists.txt mutates global CMAKE_CXX_FLAGS (adds -fno-rtti,
+# -fno-exceptions, /WX, etc.). Save/restore the flag string so the rest of
+# yellowtail builds with our own settings.
+set(_yt_saved_cxx_flags "${CMAKE_CXX_FLAGS}")
+
+set(OVERRIDE_CXX_FLAGS               OFF CACHE BOOL   "" FORCE)
+set(ENABLE_ALL_WARNINGS              OFF CACHE BOOL   "" FORCE)
+set(INTERPROCEDURAL_OPTIMIZATION     OFF CACHE BOOL   "" FORCE)
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY  ON  CACHE BOOL   "" FORCE)
+set(DOUBLE_PRECISION                 OFF CACHE BOOL   "" FORCE)
+set(OBJECT_LAYER_BITS                16  CACHE STRING "" FORCE)
+set(USE_AVX2                         ON  CACHE BOOL   "" FORCE)
+set(CPP_RTTI_ENABLED                 OFF CACHE BOOL   "" FORCE)
+set(CPP_EXCEPTIONS_ENABLED           OFF CACHE BOOL   "" FORCE)
+
+FetchContent_Declare(JoltPhysics
+        GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
+        GIT_TAG v5.5.0
+        GIT_SHALLOW TRUE
+        SOURCE_SUBDIR Build
+)
+FetchContent_MakeAvailable(JoltPhysics)
+
+set(CMAKE_CXX_FLAGS "${_yt_saved_cxx_flags}")
+unset(_yt_saved_cxx_flags)
+
 # --- Target ---
 add_executable(${PROJECT_NAME})
 add_subdirectory(src)
 
-target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/external")
+target_include_directories(${PROJECT_NAME} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/external"
+        "${JoltPhysics_SOURCE_DIR}/.."
+)
 target_link_libraries(${PROJECT_NAME} PRIVATE
         SDL3::SDL3-static
         SDL3_image::SDL3_image-static
         SDL3_shadercross::SDL3_shadercross-static
         imgui
         enet::enet_static
+        Jolt
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PROJECT_NAME})

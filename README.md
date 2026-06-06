@@ -1,6 +1,6 @@
 # yellowtail
 
-Cross-platform C++20 starter using SDL3 (windowing / input / audio / 2D + GPU rendering), SDL3_image (texture loading), SDL_shadercross (runtime HLSL → SPIR-V / DXIL / MSL), Dear ImGui (debug UI), zpl-c/enet (UDP networking), and cgltf (glTF 2.0 models). All dependencies are fetched and built from source via CMake `FetchContent` — no system packages required. Builds on Windows (MSVC / MinGW), Linux, and macOS from a single `CMakeLists.txt`.
+Cross-platform C++20 starter using SDL3 (windowing / input / audio / 2D + GPU rendering), SDL3_image (texture loading), SDL_shadercross (runtime HLSL → SPIR-V / DXIL / MSL), Dear ImGui (debug UI), zpl-c/enet (UDP networking), Jolt Physics (rigid-body simulation), and cgltf (glTF 2.0 models). All dependencies are fetched and built from source via CMake `FetchContent` — no system packages required. Builds on Windows (MSVC / MinGW), Linux, and macOS from a single `CMakeLists.txt`.
 
 ## Build
 
@@ -40,6 +40,7 @@ yellowtail/
 | [SDL_shadercross](https://github.com/libsdl-org/SDL_shadercross) | `main` (pinned SHA) | Translate HLSL or SPIR-V into SPIR-V / DXIL / MSL at runtime for `SDL_gpu` | Lets you write shaders once in HLSL and have them work on Vulkan, D3D12, and Metal without an offline build step. Bundles DXC + SPIRV-Cross statically. No tagged releases yet, hence pinning a commit. |
 | [Dear ImGui](https://github.com/ocornut/imgui) | `v1.92.8-docking` | Immediate-mode debug UI (overlays, dev tools, editors) | The standard for in-game debug UI. Docking branch adds dockable / detachable windows. Built with the `imgui_impl_sdl3` + `imgui_impl_sdlgpu3` backends so it draws through the same `SDL_gpu` device as the rest of the scene. |
 | [zpl-c/enet](https://github.com/zpl-c/enet) | `v2.6.5` | Reliable UDP networking | Modernized fork of lsalzman/enet with a clean CMake target. Ships `ws2_32` linkage on Windows automatically. |
+| [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | `v5.5.0` | Rigid-body physics (collision, constraints, vehicles, ragdolls) | Modern, fast, multithreaded, used in Horizon Forbidden West. Header-light public API, no exceptions/RTTI, single static lib (`Jolt`). Consumed via `SOURCE_SUBDIR Build` per upstream's integration guide. |
 | [cgltf](https://github.com/jkuhlmann/cgltf) | `v1.9` | glTF 2.0 model parsing | Single-header, MIT, zero deps. glTF is the modern interchange format (Blender / Maya / Substance export it natively). |
 
 ## Loading assets
@@ -106,6 +107,39 @@ ImGui_ImplSDLGPU3_RenderDrawData(ImGui::GetDrawData(), commandBuffer, renderPass
 
 Don't forget to forward SDL events: `ImGui_ImplSDL3_ProcessEvent(&event)` inside your event loop.
 
+## Jolt Physics
+
+Jolt is included via `FetchContent_Declare(... SOURCE_SUBDIR Build)` — that's upstream's recommended consumer entry point. The linkable target is plain `Jolt` (no namespace alias). Headers are reached via `${joltphysics_SOURCE_DIR}` on the include path, so all includes are rooted as `<Jolt/...>`:
+
+```cpp
+#include <Jolt/Jolt.h>                       // must come first
+#include <Jolt/RegisterTypes.h>
+#include <Jolt/Core/Factory.h>
+#include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Core/JobSystemThreadPool.h>
+#include <Jolt/Physics/PhysicsSystem.h>
+
+// once at startup:
+JPH::RegisterDefaultAllocator();
+JPH::Factory::sInstance = new JPH::Factory();
+JPH::RegisterTypes();
+
+JPH::TempAllocatorImpl temp_alloc(10 * 1024 * 1024);
+JPH::JobSystemThreadPool jobs(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
+                              std::thread::hardware_concurrency() - 1);
+JPH::PhysicsSystem physics;
+physics.Init(/*maxBodies*/ 1024, /*numBodyMutexes*/ 0,
+             /*maxBodyPairs*/ 1024, /*maxContactConstraints*/ 1024,
+             bp_layer_iface, obj_vs_bp_filter, obj_vs_obj_filter);
+
+// once at shutdown:
+JPH::UnregisterTypes();
+delete JPH::Factory::sInstance;
+JPH::Factory::sInstance = nullptr;
+```
+
+`src/main.cpp` has a minimal smoke test that does exactly this and prints `Jolt initialized: ...` on startup. Use [jrouwe/JoltPhysicsHelloWorld](https://github.com/jrouwe/JoltPhysicsHelloWorld) as the reference when you start adding bodies and stepping the simulation each frame.
+
 ## glTF models
 
 Include cgltf once with the implementation macro:
@@ -132,6 +166,7 @@ A few non-obvious decisions in `CMakeLists.txt`:
 - **`SDLSHADERCROSS_VENDORED=ON`, `SDLSHADERCROSS_CLI=OFF`, `SDLSHADERCROSS_DXC=ON`** — bundle SPIRV-Cross and DXC into the static lib (we don't want to depend on system-installed shader compilers), skip building the offline `shadercross` CLI (we don't use it in pattern #1), keep DXC enabled so HLSL works at runtime. `SDLSHADERCROSS_SPIRVCROSS_SHARED=OFF` matches our static-everywhere policy.
 - **SDL_shadercross is pinned to a `main` commit SHA, not a tag** — the project has no tagged releases yet. Bump the SHA manually when you want updates.
 - **Dear ImGui is built as a hand-rolled `add_library(imgui STATIC ...)`** — ImGui upstream deliberately doesn't ship a CMakeLists.txt. We pick exactly the backends we use (`imgui_impl_sdl3` + `imgui_impl_sdlgpu3`), so the lib only carries what we link. To add another backend, append the `.cpp` to the source list in the ImGui block.
+- **Jolt's `Build/CMakeLists.txt` mutates `CMAKE_CXX_FLAGS` globally** (`-fno-rtti`, `-fno-exceptions`, `-Wall -Werror`, MSVC equivalents). We save `CMAKE_CXX_FLAGS` before `FetchContent_MakeAvailable(JoltPhysics)` and restore it after, so the rest of yellowtail compiles with its normal flags. We also set `OVERRIDE_CXX_FLAGS=OFF`, `ENABLE_ALL_WARNINGS=OFF`, and `INTERPROCEDURAL_OPTIMIZATION=OFF` to keep Jolt's own build well-behaved. Don't drop these or reorder the block without moving the save/restore with it.
 - **`SDLIMAGE_VENDORED=OFF` + `SDLIMAGE_BACKEND_STB=ON`** — uses SDL_image's bundled `stb_image` for PNG/JPG decoding instead of building vendored copies of libpng/libjpeg/libwebp/libavif. Faster build, fewer transitive deps, covers every format we care about. AVIF/JXL/TIF/WebP are disabled explicitly for the same reason.
 - **No manual `-framework Cocoa` / `IOKit` / etc. on macOS** — SDL3's static target already propagates every macOS framework it needs via its `INTERFACE_LINK_LIBRARIES` (see SDL3's `sdl_link_dependency(...)` calls). Linking `SDL3::SDL3-static` is enough.
 - **No manual `ws2_32` / `winmm` on Windows** — same reason: enet adds `ws2_32` and SDL3 adds `winmm` via their public link interfaces.
