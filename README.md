@@ -1,6 +1,6 @@
 # yellowtail
 
-Cross-platform C++20 starter using SDL3 (windowing / input / audio / 2D + GPU rendering), SDL3_image (texture loading), SDL_shadercross (runtime HLSL → SPIR-V / DXIL / MSL), Dear ImGui (debug UI), zpl-c/enet (UDP networking), Jolt Physics (rigid-body simulation), GLM (graphics math), and cgltf (glTF 2.0 models). All dependencies are fetched and built from source via CMake `FetchContent` — no system packages required. Builds on Windows (MSVC / MinGW), Linux, and macOS from a single `CMakeLists.txt`.
+Cross-platform C++20 starter using SDL3 (windowing / input / audio / 2D + GPU rendering), SDL3_image (texture loading), SDL3_ttf (font rendering, used by Clay), SDL_shadercross (runtime HLSL → SPIR-V / DXIL / MSL), Dear ImGui (debug UI), Clay (immediate-mode UI layout via the SDL3 renderer), zpl-c/enet (UDP networking), Jolt Physics (rigid-body simulation), GLM (graphics math), and cgltf (glTF 2.0 models). All dependencies are fetched and built from source via CMake `FetchContent` — no system packages required. Builds on Windows (MSVC / MinGW), Linux, and macOS from a single `CMakeLists.txt`.
 
 ## Build
 
@@ -37,8 +37,10 @@ yellowtail/
 |---|---|---|---|
 | [SDL3](https://github.com/libsdl-org/SDL) | `release-3.4.10` | Window, input, audio, 2D + GPU rendering | Modern cross-platform foundation. Static-linked so the binary is self-contained. |
 | [SDL3_image](https://github.com/libsdl-org/SDL_image) | `release-3.4.4` | Load PNG / JPG / BMP / etc. as `SDL_Texture` | SDL's officially-recommended texture loader. Configured with the `stb` backend, so no system `libpng`/`libjpeg` required. |
+| [SDL3_ttf](https://github.com/libsdl-org/SDL_ttf) | `release-3.2.2` | TrueType font rasterization | Required by Clay's SDL3 renderer for text. Vendored FreeType, HarfBuzz/PlutoSVG disabled to keep the build lean. |
 | [SDL_shadercross](https://github.com/libsdl-org/SDL_shadercross) | `main` (pinned SHA) | Translate HLSL or SPIR-V into SPIR-V / DXIL / MSL at runtime for `SDL_gpu` | Lets you write shaders once in HLSL and have them work on Vulkan, D3D12, and Metal without an offline build step. Bundles DXC + SPIRV-Cross statically. No tagged releases yet, hence pinning a commit. |
 | [Dear ImGui](https://github.com/ocornut/imgui) | `v1.92.8-docking` | Immediate-mode debug UI (overlays, dev tools, editors) | The standard for in-game debug UI. Docking branch adds dockable / detachable windows. Built with the `imgui_impl_sdl3` + `imgui_impl_sdlgpu3` backends so it draws through the same `SDL_gpu` device as the rest of the scene. |
+| [Clay](https://github.com/nicbarker/clay) | `v0.14` | Immediate-mode UI layout (game UI / HUDs / menus) | Layout-only library (~3K LOC, single header) with a declarative `CLAY({ ... })` tree API. Uses Clay's `clay_renderer_SDL3.c` reference renderer, which draws via **`SDL_Renderer` (the 2D API), not `SDL_GPU`**. See note below. |
 | [zpl-c/enet](https://github.com/zpl-c/enet) | `v2.6.5` | Reliable UDP networking | Modernized fork of lsalzman/enet with a clean CMake target. Ships `ws2_32` linkage on Windows automatically. |
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | `v5.5.0` | Rigid-body physics (collision, constraints, vehicles, ragdolls) | Modern, fast, multithreaded, used in Horizon Forbidden West. Header-light public API, no exceptions/RTTI, single static lib (`Jolt`). Consumed via `SOURCE_SUBDIR Build` per upstream's integration guide. |
 | [GLM](https://github.com/g-truc/glm) | `1.0.1` | Graphics math (vec/mat/quat, projection helpers) | Header-only, GLSL-style API — most online graphics tutorials and Vulkan/SDL_GPU samples use it. Despite the "GL" name, it's just C++ linear algebra with no runtime dependency on OpenGL; we use it with `SDL_GPU`. Build defines `GLM_FORCE_DEPTH_ZERO_TO_ONE` (Vulkan/D3D12/Metal clip-space Z) and `GLM_ENABLE_EXPERIMENTAL` (for `glm/gtx/*` headers tutorials reach for). |
@@ -141,6 +143,44 @@ JPH::Factory::sInstance = nullptr;
 
 `src/main.cpp` has a minimal smoke test that does exactly this and prints `Jolt initialized: ...` on startup. Use [jrouwe/JoltPhysicsHelloWorld](https://github.com/jrouwe/JoltPhysicsHelloWorld) as the reference when you start adding bodies and stepping the simulation each frame.
 
+## Clay UI
+
+[Clay](https://github.com/nicbarker/clay) is a small, declarative UI layout library. You build a tree of nested `CLAY({ ... })` blocks each frame and Clay produces a list of render commands (rectangles, borders, text, images) that a backend translates into draw calls. We use the upstream `clay_renderer_SDL3.c` reference renderer, which draws via `SDL_Renderer`.
+
+**Important:** Clay's SDL3 renderer uses `SDL_Renderer` (SDL's 2D API), **not** `SDL_GPU`. If/when you migrate the main scene from `SDL_Renderer` to `SDL_GPU` (Phase 0 of [`docs/3d-roadmap.md`](docs/3d-roadmap.md)), Clay will either need (a) its own `SDL_Window` + `SDL_Renderer` instance overlaid on top, (b) a custom backend that translates Clay's render commands to `SDL_GPU` draw calls, or (c) replacement with ImGui for in-game UI. Decide before you commit to building Clay-driven gameplay UI.
+
+### Wiring
+
+Clay's renderer is a `.c` file with `static` functions and clay.h is a single-header lib. To respect the "one TU defines `CLAY_IMPLEMENTATION`" rule and keep the C99 VLAs in the renderer out of C++ TUs, this project has:
+
+- **`src/ui/clay/clay_impl.c`** — defines `CLAY_IMPLEMENTATION`, `#include`s `<clay.h>` and `<renderers/SDL3/clay_renderer_SDL3.c>`, and exposes a few `extern "C"` wrappers.
+- **`src/ui/clay/clay_impl.h`** — declares those wrappers for inclusion from C++.
+
+From a C++ TU:
+
+```cpp
+#include "ui/clay/clay_impl.h"
+
+// once:
+Clay_SetMaxElementCount(8192);
+uint64_t mem_size = Clay_MinMemorySize();
+Clay_Arena arena = Clay_CreateArenaWithCapacityAndMemory(mem_size, malloc(mem_size));
+Clay_Initialize(arena, {(float)width, (float)height},
+                Clay_ErrorHandler{ yt_clay_handle_errors, nullptr });
+
+// each frame, after polling input:
+Clay_SetLayoutDimensions({(float)w, (float)h});
+Clay_SetPointerState({(float)mouse_x, (float)mouse_y}, mouse_down);
+Clay_BeginLayout();
+CLAY({ .id = CLAY_ID("Root"), .layout = { /* ... */ } }) {
+    // children
+}
+Clay_RenderCommandArray commands = Clay_EndLayout();
+yt_clay_render(sdl_renderer, text_engine, fonts, &commands);
+```
+
+See [Clay's README](https://github.com/nicbarker/clay#readme) for the layout DSL and the [SDL3 demo](https://github.com/nicbarker/clay/blob/main/examples/SDL3-simple-demo/main.c) for a full example (TTF font loading, text measurement callback, image rendering).
+
 ## glTF models
 
 Include cgltf once with the implementation macro:
@@ -167,6 +207,7 @@ A few non-obvious decisions in `CMakeLists.txt`:
 - **`SDLSHADERCROSS_VENDORED=ON`, `SDLSHADERCROSS_CLI=OFF`, `SDLSHADERCROSS_DXC=ON`** — bundle SPIRV-Cross and DXC into the static lib (we don't want to depend on system-installed shader compilers), skip building the offline `shadercross` CLI (we don't use it in pattern #1), keep DXC enabled so HLSL works at runtime. `SDLSHADERCROSS_SPIRVCROSS_SHARED=OFF` matches our static-everywhere policy.
 - **SDL_shadercross is pinned to a `main` commit SHA, not a tag** — the project has no tagged releases yet. Bump the SHA manually when you want updates.
 - **Dear ImGui is built as a hand-rolled `add_library(imgui STATIC ...)`** — ImGui upstream deliberately doesn't ship a CMakeLists.txt. We pick exactly the backends we use (`imgui_impl_sdl3` + `imgui_impl_sdlgpu3`), so the lib only carries what we link. To add another backend, append the `.cpp` to the source list in the ImGui block.
+- **Clay ships a CMakeLists.txt that builds examples, not a consumer library** — its commented-out `add_library(clay INTERFACE)` line at the bottom is the giveaway. We set `CLAY_INCLUDE_ALL_EXAMPLES=OFF` (plus every per-backend toggle) before `FetchContent_MakeAvailable(clay)` to suppress example targets, then add `${clay_SOURCE_DIR}` to our include path manually and compile `src/ui/clay/clay_impl.c` (which `#include`s the renderer .c directly, since its functions are `static`). Clay's renderer is C99 with VLAs, so it cannot be `#include`d from a C++ TU — that's why `clay_impl.c` is `.c`, not `.cpp`, and why `src/CMakeLists.txt` globs both `*.cpp` and `*.c`.
 - **Jolt's `Build/CMakeLists.txt` mutates `CMAKE_CXX_FLAGS` globally** (`-fno-rtti`, `-fno-exceptions`, `-Wall -Werror`, MSVC equivalents). We save `CMAKE_CXX_FLAGS` before `FetchContent_MakeAvailable(JoltPhysics)` and restore it after, so the rest of yellowtail compiles with its normal flags. We also set `OVERRIDE_CXX_FLAGS=OFF`, `ENABLE_ALL_WARNINGS=OFF`, and `INTERPROCEDURAL_OPTIMIZATION=OFF` to keep Jolt's own build well-behaved. Don't drop these or reorder the block without moving the save/restore with it.
 - **`SDLIMAGE_VENDORED=OFF` + `SDLIMAGE_BACKEND_STB=ON`** — uses SDL_image's bundled `stb_image` for PNG/JPG decoding instead of building vendored copies of libpng/libjpeg/libwebp/libavif. Faster build, fewer transitive deps, covers every format we care about. AVIF/JXL/TIF/WebP are disabled explicitly for the same reason.
 - **No manual `-framework Cocoa` / `IOKit` / etc. on macOS** — SDL3's static target already propagates every macOS framework it needs via its `INTERFACE_LINK_LIBRARIES` (see SDL3's `sdl_link_dependency(...)` calls). Linking `SDL3::SDL3-static` is enough.

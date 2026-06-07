@@ -38,6 +38,19 @@ FetchContent_Declare(SDL3_image
 )
 FetchContent_MakeAvailable(SDL3_image)
 
+# --- SDL3_ttf (TrueType font rendering, used by the Clay SDL3 renderer for text) ---
+set(SDLTTF_VENDORED ON  CACHE BOOL "" FORCE)   # bundle FreeType so no system dep
+set(SDLTTF_HARFBUZZ OFF CACHE BOOL "" FORCE)   # skip text shaping — keeps the build lean
+set(SDLTTF_PLUTOSVG OFF CACHE BOOL "" FORCE)   # skip color-emoji SVG support
+set(SDLTTF_SAMPLES  OFF CACHE BOOL "" FORCE)
+set(SDLTTF_INSTALL  OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(SDL3_ttf
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
+        GIT_TAG release-3.2.2
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(SDL3_ttf)
+
 # --- SDL3_shadercross (HLSL/SPIR-V -> SPIR-V/DXIL/MSL at runtime) ---
 set(SDLSHADERCROSS_SHARED OFF CACHE BOOL "" FORCE)
 set(SDLSHADERCROSS_STATIC ON  CACHE BOOL "" FORCE)
@@ -85,6 +98,28 @@ FetchContent_Declare(enet
 )
 FetchContent_MakeAvailable(enet)
 
+# --- Clay (immediate-mode UI layout — single-header lib + SDL3 renderer .c file) ---
+# Clay ships a CMakeLists.txt that ONLY builds examples, no consumer library target.
+# We disable all the example switches, fetch the source, and pull clay.h + the SDL3
+# renderer into our own TU (see src/clay_impl.c). Renderer functions are `static`,
+# so they must be #include'd, not linked. Renderer requires SDL3_ttf and SDL3_image
+# (we already have both).
+set(CLAY_INCLUDE_ALL_EXAMPLES   OFF CACHE BOOL "" FORCE)
+set(CLAY_INCLUDE_DEMOS          OFF CACHE BOOL "" FORCE)
+set(CLAY_INCLUDE_CPP_EXAMPLE    OFF CACHE BOOL "" FORCE)
+set(CLAY_INCLUDE_RAYLIB_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CLAY_INCLUDE_SDL2_EXAMPLES  OFF CACHE BOOL "" FORCE)
+set(CLAY_INCLUDE_SDL3_EXAMPLES  OFF CACHE BOOL "" FORCE)
+set(CLAY_INCLUDE_WIN32_GDI_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CLAY_INCLUDE_SOKOL_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CLAY_INCLUDE_PLAYDATE_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(clay
+        GIT_REPOSITORY https://github.com/nicbarker/clay.git
+        GIT_TAG v0.14
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(clay)
+
 # --- GLM (header-only graphics math) ---
 FetchContent_Declare(glm
         GIT_REPOSITORY https://github.com/g-truc/glm.git
@@ -127,10 +162,12 @@ add_subdirectory(src)
 target_include_directories(${PROJECT_NAME} PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/external"
         "${JoltPhysics_SOURCE_DIR}/.."
+        "${clay_SOURCE_DIR}"
 )
 target_link_libraries(${PROJECT_NAME} PRIVATE
         SDL3::SDL3-static
         SDL3_image::SDL3_image-static
+        SDL3_ttf::SDL3_ttf-static
         SDL3_shadercross::SDL3_shadercross-static
         imgui
         enet::enet_static
