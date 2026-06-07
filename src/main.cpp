@@ -1,53 +1,67 @@
 #include <iostream>
-#include <thread>
 
 #include <SDL3/SDL.h>
-#include <SDL3_image/SDL_image.h>
-#include <Jolt/Jolt.h>
 
-int main(int /*argc*/, char** /*argv*/) {
-    std::cout << "Starting yellowtail..." << std::endl;
-    SDL_Init(SDL_INIT_VIDEO);
-
-    SDL_Window* win = SDL_CreateWindow("SDL3 Project",640, 480, 0);
-    if (win == nullptr) {
-        std::cerr << "SDL_CreateWindow Error: " << SDL_GetError() << std::endl;
+class Yellowtail {
+public:
+    Yellowtail() {
+        std::cout << "Starting yellowtail..." << std::endl;
+        if (!SDL_Init(SDL_INIT_VIDEO)) {
+            std::cout << "Error starting SDL!" << std::endl;
+        }
+    }
+    ~Yellowtail() {
+        std::cout << "Ending yellowtail..." << std::endl;
+        if (window) SDL_DestroyWindow(window);
         SDL_Quit();
-        return 1;
     }
 
-    SDL_Renderer* ren = SDL_CreateRenderer(win, NULL);
-    if (ren == nullptr) {
-        std::cerr << "SDL_CreateRenderer Error: " << SDL_GetError() << std::endl;
-        SDL_DestroyWindow(win);
-        SDL_Quit();
-        return 1;
+    bool bRunning = true;
+
+    void run() {
+        window = SDL_CreateWindow("yellowtail.", 1280, 720, 0);
+        if (!window) {
+            std::cout << "Error creating SDL window!" << std::endl;
+        }
+        while (bRunning) {
+            tick(0.0f);
+        }
     }
 
-    SDL_Event e;
-    bool quit = false;
+    void quit() {
+        bRunning = false;
+    }
 
-    // Define a rectangle
-    SDL_FRect greenSquare {270, 190, 100, 100};
-
-    while (!quit) {
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_EVENT_QUIT) {
-                quit = true;
+    void tick(float deltaTime) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            switch (event.type) {
+                case SDL_EVENT_QUIT:
+                    bRunning = false;
+                    break;
+                case SDL_EVENT_KEY_DOWN:
+                    handleInput(event.key);
+                    break;
+                default: ;
             }
         }
-
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255); // Set render draw color to black
-        SDL_RenderClear(ren); // Clear the renderer
-
-        SDL_SetRenderDrawColor(ren, 0, 255, 0, 255); // Set render draw color to green
-        SDL_RenderFillRect(ren, &greenSquare); // Render the rectangle
-
-        SDL_RenderPresent(ren); // Render the screen
     }
 
-    SDL_DestroyRenderer(ren);
-    SDL_DestroyWindow(win);
-    SDL_Quit();
+    void handleInput(SDL_KeyboardEvent& keyboard_event) {
+        if (keyboard_event.key == SDLK_ESCAPE) {
+            quit();
+        }
+    }
+
+protected:
+    SDL_Window* window = nullptr;
+};
+
+
+
+int main(int /*argc*/, char** /*argv*/) {
+    Yellowtail Game;
+    Game.run();
+    std::cout << "Ending yellowtail process." << std::endl;
     return 0;
 }
