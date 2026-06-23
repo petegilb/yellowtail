@@ -26,30 +26,35 @@ public:
 
     void mainLoop() {
         Uint64 fps = 0;
-        Uint64 lastTime = 0;
+        Uint64 fpsTimer = SDL_GetTicksNS();
+        Uint64 lastFrame = SDL_GetTicksNS();
+        // TODO change to accumulator and fixed time step
         while (bRunning) {
-            const Uint64 currentTick = SDL_GetTicks();
-            tick(0.0f);
-            fps++;
-            Uint64 deltaTime = SDL_GetTicks() - currentTick;
+            const Uint64 frameStart = SDL_GetTicksNS();
+            const float deltaTime = static_cast<float>(frameStart - lastFrame) / SDL_NS_PER_SECOND;
+            lastFrame = frameStart;
 
-            // framerate lock
-            // SDL_Delay(16);
-            // 1 sec == 1000ms and 1000ms/60frames = 16ms
-            // we delay the target amount - the delta time
+            tick(deltaTime);
+            fps++;
+
+            // framerate lock: sleep for whatever is left of this frame's budget.
+            // 1 sec / N frames = budget per frame; subtract the work we just did.
             if (framerateLock > 0) {
-                Sint64 targetMs = 1000/framerateLock;
-                targetMs -= static_cast<Sint64>(deltaTime);
-                if (targetMs > 0) {
-                    SDL_Delay(targetMs);
+                const Uint64 targetNs = SDL_NS_PER_SECOND / framerateLock;
+                const Uint64 workedNs = SDL_GetTicksNS() - frameStart;
+                if (workedNs < targetNs) {
+                    SDL_DelayNS(targetNs - workedNs);
                 }
             }
 
-            // this is once a second (so we can find our frames per second)
-            if (currentTick > lastTime + 1000) {
-                lastTime = currentTick;
-                std::string debugString = "Current FPS: " + std::to_string(fps) + " Delta Time: " + std::to_string(deltaTime);
-                SDL_SetWindowTitle(window, debugString.c_str());
+            // once a second, report FPS and the average frame time in ms
+            if (frameStart - fpsTimer >= SDL_NS_PER_SECOND) {
+                fpsTimer = frameStart;
+                const double frameMs = fps > 0 ? 1000.0 / static_cast<double>(fps) : 0.0;
+                char title[128];
+                SDL_snprintf(title, sizeof(title), "yellowtail | %d FPS | %.2f ms/frame",
+                             static_cast<int>(fps), frameMs);
+                SDL_SetWindowTitle(window, title);
                 fps = 0;
             }
         }
@@ -100,7 +105,7 @@ protected:
     bool bRunning = true;
 
     // locks the framerate if greater than 0
-    int framerateLock = 30;
+    int framerateLock = 60;
 };
 
 
