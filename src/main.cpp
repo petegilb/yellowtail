@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include <SDL3/SDL.h>
+#include <SDL3_shadercross/SDL_shadercross.h>
 
 class Yellowtail {
 public:
@@ -13,6 +14,8 @@ public:
     }
     ~Yellowtail() {
         std::cout << "Ending yellowtail..." << std::endl;
+        if (pipeline) SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
+        SDL_ShaderCross_Quit();
         if (device && window) SDL_ReleaseWindowFromGPUDevice(device, window);
         if (device) SDL_DestroyGPUDevice(device);
         if (window) SDL_DestroyWindow(window);
@@ -37,6 +40,12 @@ public:
             SDL_Log("ClaimWindow failed");
             return -1;
         }
+        if (!SDL_ShaderCross_Init()) {
+            SDL_Log("ShaderCross_Init failed");
+            return -1;
+        }
+        // load shaders for triangle
+        drawTriangle();
         mainLoop();
         return 0;
     }
@@ -132,6 +141,8 @@ public:
             colorTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
 
             SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(cmdbuf, &colorTargetInfo, 1, nullptr);
+            SDL_BindGPUGraphicsPipeline(renderPass, pipeline);
+            SDL_DrawGPUPrimitives(renderPass, 3, 1, 0, 0);
             SDL_EndGPURenderPass(renderPass);
         }
 
@@ -145,17 +156,39 @@ public:
         }
     }
 
+    SDL_GPUGraphicsPipeline* pipeline = nullptr;
     void drawTriangle() {
-        SDL_GPUShader* vertexShader = loadShader(device, "Triangle.vert.hlsl", 0, 0, 0, 0);
+        SDL_GPUShader* vertexShader = loadShader(device, "Triangle.vert", 0, 0, 0, 0);
         if (vertexShader == nullptr)
         {
             SDL_Log("Failed to create vertex shader!");
         }
 
-        SDL_GPUShader* fragmentShader = loadShader(device, "SolidColor.frag.hlsl", 0, 0, 0, 0);
+        SDL_GPUShader* fragmentShader = loadShader(device, "SolidColor.frag", 0, 0, 0, 0);
         if (fragmentShader == nullptr)
         {
             SDL_Log("Failed to create fragment shader!");
+        }
+
+        // Named local so the pointer below stays valid until SDL_CreateGPUGraphicsPipeline
+        // reads it — a compound literal would be destroyed at the end of the initializer in C++.
+        SDL_GPUColorTargetDescription colorTargetDesc = {
+            .format = SDL_GetGPUSwapchainTextureFormat(device, window),
+        };
+
+        SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {
+            .vertex_shader = vertexShader,
+            .fragment_shader = fragmentShader,
+            .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
+            .target_info = {
+                .color_target_descriptions = &colorTargetDesc,
+                .num_color_targets = 1,
+            },
+        };
+
+        pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipelineCreateInfo);
+        if (pipeline == nullptr){
+            SDL_Log("Failed to create fill pipeline!");
         }
     }
 
@@ -167,71 +200,72 @@ public:
         Uint32 storageBufferCount,
         Uint32 storageTextureCount
     ) {
-        SDL_GPUShaderStage stage;
+        // We ship HLSL source and cross-compile to the backend's format at runtime
+        // via SDL_shadercross (HLSL -> SPIR-V -> native), so the same .hlsl works on
+        // Vulkan/D3D12/Metal with no offline compile step.
+        SDL_ShaderCross_ShaderStage stage;
         if (SDL_strstr(shaderFilename, ".vert"))
         {
-            stage = SDL_GPU_SHADERSTAGE_VERTEX;
+            stage = SDL_SHADERCROSS_SHADERSTAGE_VERTEX;
         }
         else if (SDL_strstr(shaderFilename, ".frag"))
         {
-            stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
+            stage = SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT;
         }
         else
         {
             SDL_Log("Invalid shader stage!");
-            return NULL;
+            return nullptr;
         }
 
         char fullPath[256];
-        SDL_GPUShaderFormat backendFormats = SDL_GetGPUShaderFormats(inDevice);
-        SDL_GPUShaderFormat format = SDL_GPU_SHADERFORMAT_INVALID;
-        const char *entrypoint;
-
-        if (backendFormats & SDL_GPU_SHADERFORMAT_SPIRV) {
-            SDL_snprintf(fullPath, sizeof(fullPath), "%s%s.spv", BasePath, shaderFilename);
-            format = SDL_GPU_SHADERFORMAT_SPIRV;
-            entrypoint = "main";
-        } else if (backendFormats & SDL_GPU_SHADERFORMAT_MSL) {
-            SDL_snprintf(fullPath, sizeof(fullPath), "%s%s.msl", BasePath, shaderFilename);
-            format = SDL_GPU_SHADERFORMAT_MSL;
-            entrypoint = "main0";
-        } else if (backendFormats & SDL_GPU_SHADERFORMAT_DXIL) {
-            SDL_snprintf(fullPath, sizeof(fullPath), "%s%s.dxil", BasePath, shaderFilename);
-            format = SDL_GPU_SHADERFORMAT_DXIL;
-            entrypoint = "main";
-        } else {
-            SDL_Log("%s", "Unrecognized backend shader format!");
-            return NULL;
-        }
+        SDL_snprintf(fullPath, sizeof(fullPath), "%sassets/shaders/%s.hlsl", BasePath, shaderFilename);
 
         size_t codeSize;
         void* code = SDL_LoadFile(fullPath, &codeSize);
-        if (code == NULL)
+        if (code == nullptr)
         {
             SDL_Log("Failed to load shader from disk! %s", fullPath);
-            return NULL;
+            return nullptr;
         }
 
-        SDL_GPUShaderCreateInfo shaderInfo = {
-            .code = (const Uint8 *)code,
-            .code_size = codeSize,
-            .entrypoint = entrypoint,
-            .format = format,
-            .stage = stage,
-            .num_samplers = samplerCount,
-            .num_uniform_buffers = uniformBufferCount,
-            .num_storage_buffers = storageBufferCount,
-            .num_storage_textures = storageTextureCount
-        };
-        SDL_GPUShader* shader = SDL_CreateGPUShader(inDevice, &shaderInfo);
-        if (shader == NULL)
+        // 1) HLSL -> SPIR-V (DXC). SDL_LoadFile null-terminates, so it's a valid C string.
+        SDL_ShaderCross_HLSL_Info hlslInfo = {};
+        hlslInfo.source = (const char *)code;
+        hlslInfo.entrypoint = "main";
+        hlslInfo.shader_stage = stage;
+
+        size_t spirvSize;
+        void* spirv = SDL_ShaderCross_CompileSPIRVFromHLSL(&hlslInfo, &spirvSize);
+        SDL_free(code);
+        if (spirv == nullptr)
+        {
+            SDL_Log("Failed to compile HLSL to SPIR-V: %s", SDL_GetError());
+            return nullptr;
+        }
+
+        // 2) SPIR-V -> native SDL_GPUShader (transpiles to MSL/DXIL/SPIRV for this device).
+        SDL_ShaderCross_SPIRV_Info spirvInfo = {};
+        spirvInfo.bytecode = (const Uint8 *)spirv;
+        spirvInfo.bytecode_size = spirvSize;
+        spirvInfo.entrypoint = "main";
+        spirvInfo.shader_stage = stage;
+
+        SDL_ShaderCross_GraphicsShaderResourceInfo resourceInfo = {};
+        resourceInfo.num_samplers = samplerCount;
+        resourceInfo.num_uniform_buffers = uniformBufferCount;
+        resourceInfo.num_storage_buffers = storageBufferCount;
+        resourceInfo.num_storage_textures = storageTextureCount;
+
+        SDL_GPUShader* shader =
+            SDL_ShaderCross_CompileGraphicsShaderFromSPIRV(inDevice, &spirvInfo, &resourceInfo, 0);
+        SDL_free(spirv);
+        if (shader == nullptr)
         {
             SDL_Log("Failed to create shader!");
-            SDL_free(code);
-            return NULL;
+            return nullptr;
         }
 
-        SDL_free(code);
         return shader;
     }
 
