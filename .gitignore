@@ -84,3 +84,5 @@ cmake-build-release
 .idea
 build
 .DS_Store
+CLAUDE.md
+.claude

@@ -1,0 +1,55 @@
+//
+// Created by Peter Gilbert on 6/28/26.
+//
+
+#ifndef YELLOWTAIL_ENTITY_H
+#define YELLOWTAIL_ENTITY_H
+#include <cstdint>
+#include <memory>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#include "Component.h"
+
+namespace ytail {
+    class Entity {
+public:
+        Entity(std::uint32_t newId);
+
+        std::uint32_t getId() const {return entityId;}
+
+        // creates a new component and attaches it to this entity
+        template<typename T, typename... Args>
+        T* addComponent(Args&&... args) {
+            static_assert(std::is_base_of_v<Component, T>,
+                          "T must derive from ytail::Component");
+            auto owned = std::make_unique<T>(std::forward<Args>(args)...);
+            T* ptr = owned.get();
+            components.push_back(std::move(owned));
+            return ptr;
+        }
+
+        // First attached component of type T, or nullptr if the entity has none.
+        template<typename T>
+        T* getComponent() const {
+            for (const auto& c : components) {
+                if (T* hit = dynamic_cast<T*>(c.get())) {
+                    return hit;
+                }
+            }
+            return nullptr;
+        }
+
+        template<typename T>
+        bool hasComponent() const {
+            return getComponent<T>() != nullptr;
+        }
+
+private:
+        std::uint32_t entityId;
+        std::vector<std::unique_ptr<Component>> components;
+    };
+} // ytail
+
+#endif //YELLOWTAIL_ENTITY_H
