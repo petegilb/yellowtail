@@ -21,8 +21,8 @@ namespace ytail {
         SDL_Log("Ending yellowtail...");
 
         // Release everything that owns GPU resources BEFORE destroying the device.
-        // These are members, so they'd otherwise be destroyed AFTER this body runs —
-        // i.e. after SDL_DestroyGPUDevice — and their SDL_Release* calls would hit a
+        // These are members, so they'd otherwise be destroyed AFTER this body runs -
+        // i.e. after SDL_DestroyGPUDevice - and their SDL_Release* calls would hit a
         // dangling device pointer (SIGSEGV on quit).
         entities.clear();         // RenderComponents drop their shared_ptr<Mesh>/Material
         resourceManager.reset();  // frees pipelines, samplers, and cached meshes/textures
@@ -188,7 +188,7 @@ namespace ytail {
 
         SDL_GPUColorTargetInfo colorTargetInfo = { nullptr };
         colorTargetInfo.texture = swapchainTexture;
-        colorTargetInfo.clear_color = (SDL_FColor){ 0.3f, 0.4f, 0.5f, 1.0f };
+        colorTargetInfo.clear_color = SDL_FColor{ 0.3f, 0.4f, 0.5f, 1.0f };
         colorTargetInfo.load_op = SDL_GPU_LOADOP_CLEAR;
         colorTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
 

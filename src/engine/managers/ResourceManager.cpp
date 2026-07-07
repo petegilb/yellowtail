@@ -31,7 +31,7 @@ namespace ytail {
 
         // put it into a SDL_GPUTexture
         // TODO give options for how to load this texture? how do i change the sampler?
-        // Debug name for the texture — shows up in GPU debuggers (RenderDoc, Xcode, etc.).
+        // Debug name for the texture - shows up in GPU debuggers (RenderDoc, Xcode, etc.).
         SDL_PropertiesID props = SDL_CreateProperties();
         SDL_SetStringProperty(props, SDL_PROP_GPU_TEXTURE_CREATE_NAME_STRING, path.c_str());
 
@@ -126,7 +126,7 @@ namespace ytail {
             return nullptr;
         }
         // A .gltf file is JSON that describes structure (how many meshes, what accessors exist, etc.) but the actual
-        // vertex/index bytes live elsewhere — in a separate .bin file, or an external file, or (for .glb)
+        // vertex/index bytes live elsewhere - in a separate .bin file, or an external file, or (for .glb)
         // a binary chunk, or base64 embedded in the JSON. That's the "external buffer data."
         // load the actual buffers into the file. (fullPath so cgltf can resolve a relative .bin)
         result = cgltf_load_buffers(&options, data, fullPath.c_str());
@@ -466,7 +466,7 @@ namespace ytail {
 
     void ResourceManager::initializeSamplers() {
         // NOTE: fields are assigned (not designated-initialized) so declaration order
-        // doesn't matter — in particular max_anisotropy must precede enable_anisotropy.
+        // doesn't matter - in particular max_anisotropy must precede enable_anisotropy.
 
         SDL_GPUSamplerCreateInfo pointClamp = {};
         pointClamp.min_filter = SDL_GPU_FILTER_NEAREST;

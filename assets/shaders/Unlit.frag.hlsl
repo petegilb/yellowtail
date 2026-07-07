@@ -5,11 +5,13 @@ struct Input
     float2 uv      : TEXCOORD2;
 };
 
-// Unlit debug shader: no textures, no lighting, no uniform buffers.
-// Outputs the world-space normal as color (remapped from [-1,1] to [0,1]),
-// which makes each face of a cube a distinct flat color.
+// Unlit debug shader: world-space normal as color.
+// discards below pin unused fragPos/uv into the DXIL signature: see docs/shaders.md.
 float4 main(Input input) : SV_Target
 {
+    if (input.fragPos.x > 1e30f) discard;
+    if (input.uv.x      > 1e30f) discard;
+
     float3 n = normalize(input.normal);
     return float4(n * 0.5f + 0.5f, 1.0f);
 }

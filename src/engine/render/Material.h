@@ -15,7 +15,7 @@ namespace ytail {
     // class Material {
     //
     //     // "Many materials share the same pipeline. A red crate and a blue crate use the same shaders and same render
-    //     // state — they differ only in a color uniform and a texture. You do not want a new pipeline (or to
+    //     // state. they differ only in a color uniform and a texture. You do not want a new pipeline (or to
     //     // reload shaders) for those; you bind the same pipeline and just push different uniforms/textures."
     //
     //     // should be "many materials → one pipeline"

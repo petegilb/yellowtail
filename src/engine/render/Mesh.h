@@ -5,6 +5,7 @@
 #ifndef YELLOWTAIL_MESH_H
 #define YELLOWTAIL_MESH_H
 
+#include <string>
 #include <utility>
 #include <vector>
 #include <SDL3/SDL.h>

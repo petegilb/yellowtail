@@ -40,7 +40,7 @@ FetchContent_MakeAvailable(SDL3_image)
 
 # --- SDL3_ttf (TrueType font rendering, used by the Clay SDL3 renderer for text) ---
 set(SDLTTF_VENDORED ON  CACHE BOOL "" FORCE)   # bundle FreeType so no system dep
-set(SDLTTF_HARFBUZZ OFF CACHE BOOL "" FORCE)   # skip text shaping — keeps the build lean
+set(SDLTTF_HARFBUZZ OFF CACHE BOOL "" FORCE)   # skip text shaping - keeps the build lean
 set(SDLTTF_PLUTOSVG OFF CACHE BOOL "" FORCE)   # skip color-emoji SVG support
 set(SDLTTF_SAMPLES  OFF CACHE BOOL "" FORCE)
 set(SDLTTF_INSTALL  OFF CACHE BOOL "" FORCE)
@@ -52,6 +52,9 @@ FetchContent_Declare(SDL3_ttf
 FetchContent_MakeAvailable(SDL3_ttf)
 
 # --- SDL3_shadercross (HLSL/SPIR-V -> SPIR-V/DXIL/MSL at runtime) ---
+# DXC's bundled standalone `clang` executable doesn't build on modern MSVC.
+# DXC already excludes it from `all`; CLion Run configs must target
+# `yellowtail` (not "Project"/"all") to avoid pulling it in. See README "Build".
 set(SDLSHADERCROSS_SHARED OFF CACHE BOOL "" FORCE)
 set(SDLSHADERCROSS_STATIC ON  CACHE BOOL "" FORCE)
 set(SDLSHADERCROSS_SPIRVCROSS_SHARED OFF CACHE BOOL "" FORCE)
@@ -98,7 +101,7 @@ FetchContent_Declare(enet
 )
 FetchContent_MakeAvailable(enet)
 
-# --- Clay (immediate-mode UI layout — single-header lib + SDL3 renderer .c file) ---
+# --- Clay (immediate-mode UI layout - single-header lib + SDL3 renderer .c file) ---
 # Clay ships a CMakeLists.txt that ONLY builds examples, no consumer library target.
 # We disable all the example switches, fetch the source, and pull clay.h + the SDL3
 # renderer into our own TU (see src/clay_impl.c). Renderer functions are `static`,
@@ -192,6 +195,19 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>/assets"
         COMMENT "Copying assets to output directory"
 )
+
+# --- Windows: copy DXC runtime DLLs next to the executable ---
+# dxcompiler is always SHARED (DXC forces it). Without our build next to the
+# exe, Windows loads System32's dxcompiler.dll by mistake.
+if(WIN32)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:dxcompiler>"
+                    "$<TARGET_FILE:dxildll>"
+                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+            COMMENT "Copying dxcompiler.dll + dxil.dll next to executable"
+    )
+endif()
 
 if (WIN32 AND MINGW)
     target_link_options(${PROJECT_NAME} PRIVATE -mwindows)

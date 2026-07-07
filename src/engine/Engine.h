@@ -55,7 +55,7 @@ namespace ytail {
         // world stuff
         std::unordered_map<Uint32, std::unique_ptr<Entity>> entities;
 
-        // The camera to render from this frame. Non-owning — the entity itself lives in
+        // The camera to render from this frame. Non-owning - the entity itself lives in
         // `entities`. Must have a TransformComponent (view) + CameraComponent (projection).
         Entity* activeCamera = nullptr;
 
