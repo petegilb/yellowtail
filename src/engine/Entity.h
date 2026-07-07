@@ -4,20 +4,20 @@
 
 #ifndef YELLOWTAIL_ENTITY_H
 #define YELLOWTAIL_ENTITY_H
-#include <cstdint>
 #include <memory>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include <SDL3/SDL.h>
 #include "Component.h"
 
 namespace ytail {
     class Entity {
 public:
-        Entity(std::uint32_t newId);
+        Entity(Uint32 newId);
 
-        std::uint32_t getId() const {return entityId;}
+        [[nodiscard]] Uint32 getId() const {return entityId;}
 
         // creates a new component and attaches it to this entity
         template<typename T, typename... Args>
@@ -42,12 +42,12 @@ public:
         }
 
         template<typename T>
-        bool hasComponent() const {
+        [[nodiscard]] bool hasComponent() const {
             return getComponent<T>() != nullptr;
         }
 
 private:
-        std::uint32_t entityId;
+        Uint32 entityId;
         std::vector<std::unique_ptr<Component>> components;
     };
 } // ytail

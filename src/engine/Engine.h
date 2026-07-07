@@ -14,54 +14,53 @@
 #include "Entity.h"
 
 namespace ytail {
+    class ResourceManager;
 
-class Engine {
-public:
-    Engine();
-    ~Engine();
+    class Engine {
+    public:
+        Engine();
+        ~Engine();
 
-    int run();
+        int run();
 
-    void mainLoop();
+        void mainLoop();
 
-    void quit();
+        void quit();
 
-    // Advance a frame (one iteration in the main loop)
-    void tick(float deltaTime);
+        // Advance a frame (one iteration in the main loop)
+        void tick(float deltaTime);
 
-    void inputTick();
+        void inputTick();
 
-    void updateTick();
+        void updateTick();
 
-    int renderTick();
+        int renderTick();
 
-    void handleInput(const SDL_KeyboardEvent& keyboard_event);
+        void handleInput(const SDL_KeyboardEvent& keyboard_event);
 
-    SDL_GPUGraphicsPipeline* pipeline = nullptr;
-    void drawTriangle();
+        Entity* addEntity();
+        Entity* getEntity(Uint32 id);
 
-    SDL_GPUShader* loadShader(
-        SDL_GPUDevice* inDevice,
-        const char* shaderFilename,
-        Uint32 samplerCount,
-        Uint32 uniformBufferCount,
-        Uint32 storageBufferCount,
-        Uint32 storageTextureCount
-    );
+        void setActiveCamera(Uint32 id);
+    protected:
+        SDL_Window* window = nullptr;
+        bool bRunning = true;
+        SDL_GPUDevice* device = nullptr;
+        const char* BasePath = nullptr;
 
-    void InitializeAssetLoader();
+        // locks the framerate if greater than 0
+        int framerateLock = 60;
+        int entityCounter = 0;
 
-protected:
-    SDL_Window* window = nullptr;
-    bool bRunning = true;
-    SDL_GPUDevice* device = nullptr;
-    const char* BasePath = nullptr;
+        // world stuff
+        std::unordered_map<Uint32, std::unique_ptr<Entity>> entities;
 
-    // locks the framerate if greater than 0
-    int framerateLock = 60;
+        // The camera to render from this frame. Non-owning — the entity itself lives in
+        // `entities`. Must have a TransformComponent (view) + CameraComponent (projection).
+        Entity* activeCamera = nullptr;
 
-    // world stuff
-    std::unordered_map<std::uint32_t, std::unique_ptr<Entity>> entities;
+        // ResourceManager that handles the lifetimes of objects loaded into memory
+        std::unique_ptr<ytail::ResourceManager> resourceManager;
 };
 
 } // ytail

@@ -4,18 +4,29 @@
 
 #include "Engine.h"
 
+#include "components/RenderComponent.h"
+#include "components/TransformComponent.h"
+#include "components/CameraComponent.h"
+#include "managers/ResourceManager.h"
+
 namespace ytail {
     Engine::Engine() {
         SDL_Log("Starting yellowtail...");
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error starting SDL! %s", SDL_GetError());
         }
-        InitializeAssetLoader();
     }
 
     Engine::~Engine() {
         SDL_Log("Ending yellowtail...");
-        if (pipeline) SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
+
+        // Release everything that owns GPU resources BEFORE destroying the device.
+        // These are members, so they'd otherwise be destroyed AFTER this body runs —
+        // i.e. after SDL_DestroyGPUDevice — and their SDL_Release* calls would hit a
+        // dangling device pointer (SIGSEGV on quit).
+        entities.clear();         // RenderComponents drop their shared_ptr<Mesh>/Material
+        resourceManager.reset();  // frees pipelines, samplers, and cached meshes/textures
+
         SDL_ShaderCross_Quit();
         if (device && window) SDL_ReleaseWindowFromGPUDevice(device, window);
         if (device) SDL_DestroyGPUDevice(device);
@@ -45,8 +56,29 @@ namespace ytail {
             SDL_Log("ShaderCross_Init failed");
             return -1;
         }
-        // load shaders for triangle
-        drawTriangle();
+        BasePath = SDL_GetBasePath();
+        resourceManager = std::make_unique<ResourceManager>(device, window, BasePath);
+
+        // scene setup
+        Entity* camera = addEntity();
+        const auto camTransform = camera->addComponent<TransformComponent>();
+        camera->addComponent<CameraComponent>();
+        setActiveCamera(camera->getId());
+        camTransform->position = glm::vec3(0.0f, 3.0f, 5.0f);   // back up 5 units, looking down -Z toward origin
+        camTransform->setRotationEuler(glm::vec3(-30.0f, 0.0f, 0.0f));
+
+        Entity* cube = addEntity();
+        cube->addComponent<TransformComponent>();
+        auto cubeRender = cube->addComponent<RenderComponent>();
+        // add mesh and materials to render component
+        // TODO handle when a submesh doesn't have a material
+        std::shared_ptr<Mesh> cubeMesh = resourceManager->getMesh("models/cube.glb");
+        cubeRender->setMesh(cubeMesh);
+        // TODO how should this process work?
+        auto material = std::make_shared<Material>();
+        material->pipelineType = PipelineType::UnlitStatic;
+        cubeRender->addMaterial(material);
+
         mainLoop();
         return 0;
     }
@@ -117,36 +149,122 @@ namespace ytail {
     }
 
     int Engine::renderTick() {
+        // get the active camera + aspect ratio
+        if (activeCamera == nullptr) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Render camera is null!");
+            return -1;
+        }
+        auto* camXform = activeCamera->getComponent<TransformComponent>();
+        auto* camComp  = activeCamera->getComponent<CameraComponent>();
+        int w, h;
+        SDL_GetWindowSizeInPixels(window, &w, &h);
+        if (h == 0) return 0;
+        const float aspect = static_cast<float>(w) / static_cast<float>(h);
+        glm::mat4 view = glm::inverse(camXform->modelMatrix());
+        glm::mat4 projection = camComp->projectionMatrix(aspect);
+
         // command buffer of commands to be executed by SDL3_gpu
         // does not need to be freed and can only be used on the thread in which it is created (render thread?)
-        SDL_GPUCommandBuffer* cmdbuf = SDL_AcquireGPUCommandBuffer(device);
-        if (cmdbuf == nullptr){
+        SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(device);
+        if (commandBuffer == nullptr){
             SDL_Log("AcquireGPUCommandBuffer failed: %s", SDL_GetError());
             return -1;
         }
+
         // a swapchain is a queue of framebuffers (or textures) that are swapped to the screen one after another
         // allow rendering into one texture while another is being displayed
         // help avoid tearing, flickering, and stuttering
         SDL_GPUTexture* swapchainTexture;
-        if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmdbuf, window, &swapchainTexture, nullptr, nullptr)) {
+        if (!SDL_WaitAndAcquireGPUSwapchainTexture(commandBuffer, window, &swapchainTexture, nullptr, nullptr)) {
             SDL_Log("WaitAndAcquireGPUSwapchainTexture failed: %s", SDL_GetError());
+            SDL_SubmitGPUCommandBuffer(commandBuffer);
             return -1;
         }
-        if (swapchainTexture != nullptr)
-        {
-            SDL_GPUColorTargetInfo colorTargetInfo = { 0 };
-            colorTargetInfo.texture = swapchainTexture;
-            colorTargetInfo.clear_color = (SDL_FColor){ 0.3f, 0.4f, 0.5f, 1.0f };
-            colorTargetInfo.load_op = SDL_GPU_LOADOP_CLEAR;
-            colorTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
-
-            SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(cmdbuf, &colorTargetInfo, 1, nullptr);
-            SDL_BindGPUGraphicsPipeline(renderPass, pipeline);
-            SDL_DrawGPUPrimitives(renderPass, 3, 1, 0, 0);
-            SDL_EndGPURenderPass(renderPass);
+        if (swapchainTexture == nullptr) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Swapchain texture is null! can't render!");
+            SDL_SubmitGPUCommandBuffer(commandBuffer);
+            return -1;
         }
 
-        SDL_SubmitGPUCommandBuffer(cmdbuf);
+        SDL_GPUColorTargetInfo colorTargetInfo = { nullptr };
+        colorTargetInfo.texture = swapchainTexture;
+        colorTargetInfo.clear_color = (SDL_FColor){ 0.3f, 0.4f, 0.5f, 1.0f };
+        colorTargetInfo.load_op = SDL_GPU_LOADOP_CLEAR;
+        colorTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
+
+        // render all pipelines for all materials here...
+        // we are only using one render pass, when would we want to use more than one?
+        // TODO add depth buffer here!
+        SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(commandBuffer, &colorTargetInfo, 1, nullptr);
+
+        // for each render component and transform component, get the mesh and the material in order to render it
+        // TODO optimize this by pipeline binding (rebinding the same pipeline multiple times is a waste of resources)
+        for (const auto& [idx, entity]: entities) {
+            if (entity == nullptr) continue;
+            const auto* renderComponent = entity->getComponent<RenderComponent>();
+            const auto* transformComponent = entity->getComponent<TransformComponent>();
+            if (renderComponent == nullptr || transformComponent == nullptr) continue;
+
+            auto& mesh = renderComponent->mesh;
+            if (!mesh) continue;
+
+            // get vertex and index buffers from mesh
+            SDL_GPUBufferBinding vertexBinding { .buffer = mesh->vertexBuffer, .offset = 0 };
+            SDL_GPUBufferBinding indexBinding { .buffer = mesh->indexBuffer, .offset = 0 };
+            SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
+            SDL_BindGPUIndexBuffer(renderPass, &indexBinding, mesh->indexSize);
+            // transform uniform (uses the camera input from the top of this function)
+            const glm::mat4 model = transformComponent->modelMatrix();
+            VertexUniform vsu{
+                projection * view * model,
+                model,
+                transformComponent->normalMatrix()
+            };
+            SDL_PushGPUVertexUniformData(commandBuffer, 0, &vsu, sizeof(vsu));
+
+
+            // how do i integrate these buffers and our pipeline and draw properly?
+
+            const auto& materials = renderComponent->materials;
+
+            for (const Submesh& submesh : mesh->submeshes) {
+                if (submesh.materialSlot >= materials.size()) continue;
+                const auto& material = materials[submesh.materialSlot];
+                if (!material) continue;
+
+                SDL_GPUGraphicsPipeline* pipeline = resourceManager->getPipeline(material->pipelineType);
+                if (!pipeline) continue;
+                SDL_BindGPUGraphicsPipeline(renderPass, pipeline);
+                if (!material->textures.empty()){
+                    // build one binding per texture, in slot order (index 0 → t0/s0, 1 → t1/s1, ...)
+                    std::vector<SDL_GPUTextureSamplerBinding> binds;
+                    binds.reserve(material->textures.size());
+                    for (const auto& tb : material->textures) {
+                        binds.push_back({ .texture = tb.texture->handle(), .sampler = tb.sampler });
+                    }
+                    // one call binds the whole set starting at slot 0
+                    SDL_BindGPUFragmentSamplers(
+                        renderPass,
+                        0,
+                        binds.data(),
+                        static_cast<Uint32>(binds.size())
+                    );
+                }
+                // Push the uniform data (it's a vector of raw bytes)
+                if (!material->uniformData.empty()) {
+                    SDL_PushGPUFragmentUniformData(commandBuffer, 0, material->uniformData.data(),
+                        static_cast<Uint32>(material->uniformData.size())
+                    );
+                }
+                // draw using all our data
+                SDL_DrawGPUIndexedPrimitives(renderPass, submesh.indexCount, 1,
+                    submesh.indexOffset, 0, 0
+                );
+            }
+        }
+
+        SDL_EndGPURenderPass(renderPass);
+        SDL_SubmitGPUCommandBuffer(commandBuffer);
         return 0;
     }
 
@@ -156,113 +274,22 @@ namespace ytail {
         }
     }
 
-    void Engine::drawTriangle() {
-        SDL_GPUShader* vertexShader = loadShader(device, "Triangle.vert", 0, 0, 0, 0);
-        if (vertexShader == nullptr)
-        {
-            SDL_Log("Failed to create vertex shader!");
-        }
-
-        SDL_GPUShader* fragmentShader = loadShader(device, "SolidColor.frag", 0, 0, 0, 0);
-        if (fragmentShader == nullptr)
-        {
-            SDL_Log("Failed to create fragment shader!");
-        }
-
-        // Named local so the pointer below stays valid until SDL_CreateGPUGraphicsPipeline
-        // reads it — a compound literal would be destroyed at the end of the initializer in C++.
-        SDL_GPUColorTargetDescription colorTargetDesc = {
-            .format = SDL_GetGPUSwapchainTextureFormat(device, window),
-        };
-
-        SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {
-            .vertex_shader = vertexShader,
-            .fragment_shader = fragmentShader,
-            .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-            .target_info = {
-                .color_target_descriptions = &colorTargetDesc,
-                .num_color_targets = 1,
-            },
-        };
-
-        pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipelineCreateInfo);
-        if (pipeline == nullptr){
-            SDL_Log("Failed to create fill pipeline!");
-        }
+    Entity * Engine::addEntity() {
+        entityCounter++;
+        entities[entityCounter] = std::make_unique<Entity>(entityCounter);
+        return entities[entityCounter].get();
     }
 
-    SDL_GPUShader * Engine::loadShader(SDL_GPUDevice *inDevice, const char *shaderFilename, Uint32 samplerCount,
-        Uint32 uniformBufferCount, Uint32 storageBufferCount, Uint32 storageTextureCount) {
-        // We ship HLSL source and cross-compile to the backend's format at runtime
-        // via SDL_shadercross (HLSL -> SPIR-V -> native), so the same .hlsl works on
-        // Vulkan/D3D12/Metal with no offline compile step.
-        SDL_ShaderCross_ShaderStage stage;
-        if (SDL_strstr(shaderFilename, ".vert"))
-        {
-            stage = SDL_SHADERCROSS_SHADERSTAGE_VERTEX;
-        }
-        else if (SDL_strstr(shaderFilename, ".frag"))
-        {
-            stage = SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT;
-        }
-        else
-        {
-            SDL_Log("Invalid shader stage!");
-            return nullptr;
-        }
-
-        char fullPath[256];
-        SDL_snprintf(fullPath, sizeof(fullPath), "%sassets/shaders/%s.hlsl", BasePath, shaderFilename);
-
-        size_t codeSize;
-        void* code = SDL_LoadFile(fullPath, &codeSize);
-        if (code == nullptr)
-        {
-            SDL_Log("Failed to load shader from disk! %s", fullPath);
-            return nullptr;
-        }
-
-        // 1) HLSL -> SPIR-V (DXC). SDL_LoadFile null-terminates, so it's a valid C string.
-        SDL_ShaderCross_HLSL_Info hlslInfo = {};
-        hlslInfo.source = (const char *)code;
-        hlslInfo.entrypoint = "main";
-        hlslInfo.shader_stage = stage;
-
-        size_t spirvSize;
-        void* spirv = SDL_ShaderCross_CompileSPIRVFromHLSL(&hlslInfo, &spirvSize);
-        SDL_free(code);
-        if (spirv == nullptr)
-        {
-            SDL_Log("Failed to compile HLSL to SPIR-V: %s", SDL_GetError());
-            return nullptr;
-        }
-
-        // 2) SPIR-V -> native SDL_GPUShader (transpiles to MSL/DXIL/SPIRV for this device).
-        SDL_ShaderCross_SPIRV_Info spirvInfo = {};
-        spirvInfo.bytecode = (const Uint8 *)spirv;
-        spirvInfo.bytecode_size = spirvSize;
-        spirvInfo.entrypoint = "main";
-        spirvInfo.shader_stage = stage;
-
-        SDL_ShaderCross_GraphicsShaderResourceInfo resourceInfo = {};
-        resourceInfo.num_samplers = samplerCount;
-        resourceInfo.num_uniform_buffers = uniformBufferCount;
-        resourceInfo.num_storage_buffers = storageBufferCount;
-        resourceInfo.num_storage_textures = storageTextureCount;
-
-        SDL_GPUShader* shader =
-                SDL_ShaderCross_CompileGraphicsShaderFromSPIRV(inDevice, &spirvInfo, &resourceInfo, 0);
-        SDL_free(spirv);
-        if (shader == nullptr)
-        {
-            SDL_Log("Failed to create shader!");
-            return nullptr;
-        }
-
-        return shader;
+    Entity* Engine::getEntity(const Uint32 id) {
+        if (!entities.contains(id)) return nullptr;
+        return entities[id].get();
     }
 
-    void Engine::InitializeAssetLoader() {
-        BasePath = SDL_GetBasePath();
+    void Engine::setActiveCamera(Uint32 id) {
+        if (!entities.contains(id)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "setActiveCamera tried to set to a null entity! %d", id);
+            return;
+        }
+        activeCamera = entities[id].get();
     }
 } // ytail

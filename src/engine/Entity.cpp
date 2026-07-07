@@ -5,7 +5,7 @@
 #include "Entity.h"
 
 namespace ytail {
-    Entity::Entity(const std::uint32_t newId) {
+    Entity::Entity(const Uint32 newId) {
         entityId = newId;
     }
 } // ytail
