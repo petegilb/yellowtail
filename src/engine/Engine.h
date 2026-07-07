@@ -61,6 +61,12 @@ namespace ytail {
 
         // ResourceManager that handles the lifetimes of objects loaded into memory
         std::unique_ptr<ytail::ResourceManager> resourceManager;
+
+        // dear imgui
+        void initializeImGui();
+        void updateImGui();
+        void renderImGui(SDL_GPUCommandBuffer* commandBuffer);
+        void shutdownImGui();
 };
 
 } // ytail

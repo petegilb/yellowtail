@@ -4,6 +4,10 @@
 
 #include "Engine.h"
 
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+#include "imgui_impl_sdlgpu3.h"
+
 #include "components/RenderComponent.h"
 #include "components/TransformComponent.h"
 #include "components/CameraComponent.h"
@@ -19,6 +23,11 @@ namespace ytail {
 
     Engine::~Engine() {
         SDL_Log("Ending yellowtail...");
+
+        // Wait for any in-flight frames to finish before we tear down GPU-backed
+        // resources (ImGui backend owns pipelines, buffers, fonts).
+        if (device) SDL_WaitForGPUIdle(device);
+        shutdownImGui();
 
         // Release everything that owns GPU resources BEFORE destroying the device.
         // These are members, so they'd otherwise be destroyed AFTER this body runs -
@@ -58,6 +67,7 @@ namespace ytail {
         }
         BasePath = SDL_GetBasePath();
         resourceManager = std::make_unique<ResourceManager>(device, window, BasePath);
+        initializeImGui();
 
         // scene setup
         Entity* camera = addEntity();
@@ -132,6 +142,7 @@ namespace ytail {
     void Engine::inputTick() {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            ImGui_ImplSDL3_ProcessEvent(&event);
             switch (event.type) {
                 case SDL_EVENT_QUIT:
                     bRunning = false;
@@ -145,7 +156,7 @@ namespace ytail {
     }
 
     void Engine::updateTick() {
-
+        updateImGui();
     }
 
     int Engine::renderTick() {
@@ -191,6 +202,9 @@ namespace ytail {
         colorTargetInfo.clear_color = SDL_FColor{ 0.3f, 0.4f, 0.5f, 1.0f };
         colorTargetInfo.load_op = SDL_GPU_LOADOP_CLEAR;
         colorTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
+
+        // ImGui uploads its vertex/index data here -- needs to be before BeginRenderPass
+        renderImGui(commandBuffer);
 
         // render all pipelines for all materials here...
         // we are only using one render pass, when would we want to use more than one?
@@ -263,6 +277,9 @@ namespace ytail {
             }
         }
 
+        // Draw UI as the last thing in the scene pass so it composites on top.
+        ImGui_ImplSDLGPU3_RenderDrawData(ImGui::GetDrawData(), commandBuffer, renderPass);
+
         SDL_EndGPURenderPass(renderPass);
         SDL_SubmitGPUCommandBuffer(commandBuffer);
         return 0;
@@ -291,5 +308,46 @@ namespace ytail {
             return;
         }
         activeCamera = entities[id].get();
+    }
+
+    void Engine::initializeImGui(){
+        // Setup Dear ImGui context
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+
+        // Setup Platform/Renderer backends
+        ImGui_ImplSDL3_InitForSDLGPU(window);
+        ImGui_ImplSDLGPU3_InitInfo init_info = {};
+        init_info.Device = device;
+        init_info.ColorTargetFormat = SDL_GetGPUSwapchainTextureFormat(device, window);
+        init_info.MSAASamples = SDL_GPU_SAMPLECOUNT_1;                      // Only used in multi-viewports mode.
+        init_info.SwapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR;  // Only used in multi-viewports mode.
+        init_info.PresentMode = SDL_GPU_PRESENTMODE_VSYNC;
+        ImGui_ImplSDLGPU3_Init(&init_info);
+    }
+
+    void Engine::updateImGui(){
+        // Start the Dear ImGui frame
+        ImGui_ImplSDLGPU3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+        ImGui::ShowDemoWindow(); // Show demo window! :)
+    }
+
+    void Engine::renderImGui(SDL_GPUCommandBuffer* commandBuffer){
+        // Closes the ImGui frame started in updateImGui() and stages the draw list.
+        // PrepareDrawData copies vertex/index buffers to GPU memory; this MUST happen
+        // outside any render pass (SDL_GPU forbids buffer uploads inside a pass).
+        ImGui::Render();
+        ImGui_ImplSDLGPU3_PrepareDrawData(ImGui::GetDrawData(), commandBuffer);
+    }
+
+    void Engine::shutdownImGui(){
+        ImGui_ImplSDL3_Shutdown();
+        ImGui_ImplSDLGPU3_Shutdown();
+        ImGui::DestroyContext();
     }
 } // ytail
