@@ -54,6 +54,7 @@ namespace ytail {
         // locks the framerate if greater than 0
         int framerateLock = 60;
         int entityCounter = 0;
+        int drawCallsLastFrame = 0;
 
         // world stuff
         glm::vec3 ambientLight{0.0f}; // currently set to ambientDebug

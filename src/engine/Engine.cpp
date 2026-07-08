@@ -199,6 +199,8 @@ namespace ytail {
     }
 
     int Engine::renderTick() {
+        drawCallsLastFrame = 0;
+        // just found this reference: https://dawaralvi.github.io/sdl-gpu/
         // get the active camera + aspect ratio
         if (activeCamera == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Render camera is null!");
@@ -331,6 +333,8 @@ namespace ytail {
                 SDL_DrawGPUIndexedPrimitives(renderPass, submesh.indexCount, 1,
                     submesh.indexOffset, 0, 0
                 );
+                // count draw calls (not including imgui and other things drawing)
+                drawCallsLastFrame++;
             }
         }
 
@@ -351,7 +355,7 @@ namespace ytail {
         }
     }
 
-    Entity * Engine::addEntity() {
+    Entity* Engine::addEntity() {
         entityCounter++;
         entities[entityCounter] = std::make_unique<Entity>(entityCounter);
         return entities[entityCounter].get();
@@ -442,6 +446,7 @@ namespace ytail {
             ImGui::ColorEdit3("Ambient Light", (float*)&ambientDebug);
             ImGui::SliderFloat("Ambient Intensity", &ambientIntensity, 0.0f, 10.0f);
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+            ImGui::Text("Draw Calls Last Frame %d", drawCallsLastFrame);
             ImGui::End();
         }
     }
