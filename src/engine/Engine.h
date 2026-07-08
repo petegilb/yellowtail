@@ -49,6 +49,7 @@ namespace ytail {
         bool bRunning = true;
         SDL_GPUDevice* device = nullptr;
         const char* BasePath = nullptr;
+        bool bUsingSRGB = false;
 
         // locks the framerate if greater than 0
         int framerateLock = 60;
@@ -72,7 +73,7 @@ namespace ytail {
         void shutdownImGui();
         ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
         ImVec4 ambientDebug = ImVec4(1.f, 1.f, 1.f, 1.00f);
-        float ambientIntensity = 1.0f;
+        float ambientIntensity = 0.2f;
         bool showDebugWindow = false;
 };
 

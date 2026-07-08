@@ -62,6 +62,20 @@ namespace ytail {
             SDL_Log("ClaimWindow failed");
             return -1;
         }
+        // Output encode: render in linear, let the swapchain re-encode to sRGB on scanout.
+        // SDR_LINEAR makes the swapchain the *_SRGB format, so a linear fragment result is
+        // gamma-encoded by the hardware on write. Pairs with the per-texture srgb decode in
+        // getTexture() to close the loop on a fully linear lighting pipeline.
+        // Must run before pipelines/ImGui query the swapchain format (they pick up the _SRGB variant).
+        if (SDL_WindowSupportsGPUSwapchainComposition(device, window,
+                SDL_GPU_SWAPCHAINCOMPOSITION_SDR_LINEAR)) {
+            SDL_SetGPUSwapchainParameters(device, window,
+                SDL_GPU_SWAPCHAINCOMPOSITION_SDR_LINEAR, SDL_GPU_PRESENTMODE_VSYNC);
+            bUsingSRGB = true;
+        } else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "SDR_LINEAR swapchain unsupported; output will not be gamma-correct");
+        }
         if (!SDL_ShaderCross_Init()) {
             SDL_Log("ShaderCross_Init failed");
             return -1;
@@ -82,8 +96,8 @@ namespace ytail {
         const auto lightTransform = light0->addComponent<TransformComponent>();
         const auto lightComponent = light0->addComponent<LightComponent>();
         lightComponent->color = glm::vec3(1.0f, 1.0f, 1.0f);
-        lightComponent->intensity = 5.0f;
-        lightTransform->position = glm::vec3(0.0f, 3.0f, -5.0f);
+        lightComponent->intensity = 1.0f;
+        lightTransform->position = glm::vec3(1.2f, 1.0f, 2.0f);  // camera side, up and to the right
 
         Entity* cube = addEntity();
         cube->addComponent<TransformComponent>();
@@ -101,7 +115,9 @@ namespace ytail {
         material->textures.push_back({ resourceManager->getTexture("textures/container2_specular.png", false), sampler });
         // material uniform (b1 space3): just shininess for now.
         MaterialUniform matUniform{};
-        matUniform.shininess = 32.0f;
+        // https://learnopengl.com/Advanced-Lighting/Advanced-Lighting
+        // hardcoded exponent value to 64
+        matUniform.shininess = 64.0f;
         material->uniformData.resize(sizeof(matUniform));
         SDL_memcpy(material->uniformData.data(), &matUniform, sizeof(matUniform));
         cubeRender->addMaterial(material);
@@ -367,10 +383,30 @@ namespace ytail {
         //ImGui::StyleColorsLight();
 
         // Setup scaling
+
+
         float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
         ImGuiStyle& style = ImGui::GetStyle();
         style.ScaleAllSizes(main_scale);
         style.FontScaleDpi = main_scale;
+        // if SRGB update colors so it looks right after gamma correctness
+        if (bUsingSRGB) {
+            // ref: https://github.com/ocornut/imgui/issues/8271#issuecomment-2564954070
+            // Go through every colour and convert it to linear
+            // This is because ImGui uses linear colours but we are using sRGB
+            // This is a simple approximation of the conversion
+            for (auto & col : style.Colors) {
+                /*float linear = (srgb <= 0.04045f) ? srgb / 12.92f : pow((srgb + 0.055f)
+                 * / 1.055f, 2.4f);*/
+
+                col.x = col.x <= 0.04045f ? col.x / 12.92f
+                                          : pow((col.x + 0.055f) / 1.055f, 2.4f);
+                col.y = col.y <= 0.04045f ? col.y / 12.92f
+                                          : pow((col.y + 0.055f) / 1.055f, 2.4f);
+                col.z = col.z <= 0.04045f ? col.z / 12.92f
+                                          : pow((col.z + 0.055f) / 1.055f, 2.4f);
+            }
+        }
 
         // Setup Platform/Renderer backends
         ImGui_ImplSDL3_InitForSDLGPU(window);

@@ -32,7 +32,7 @@ namespace ytail {
 
     // Mirrors cbuffer Material from BlinnPhongLit.frag.hlsl : register(b1, space3).
     struct MaterialUniform {
-        float shininess = 32.0f;
+        float shininess = 64.0f;
         float _pad[3] = {};
     };
     static_assert(sizeof(MaterialUniform) == 16, "MaterialUniform must match the b1 cbuffer row size");

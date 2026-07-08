@@ -41,11 +41,11 @@ float4 main(Input input) : SV_Target
     float  diff     = max(dot(norm, lightDir), 0.0f);
     float3 diffuse  = lightColor * diff * diffuseColor;
 
-    // specular
-    float3 viewDir    = normalize(viewPos - input.fragPos);
-    float3 reflectDir = reflect(-lightDir, norm);
-    float  spec       = pow(max(dot(viewDir, reflectDir), 0.0f), shininess);
-    float3 specular   = lightColor * spec * specularTex.Sample(specularSmp, input.uv).rgb;
+    // specular (Blinn-Phong halfway vector)
+    float3 viewDir  = normalize(viewPos - input.fragPos);
+    float3 halfway  = normalize(lightDir + viewDir);
+    float  spec     = pow(max(dot(norm, halfway), 0.0f), shininess);
+    float3 specular = lightColor * spec * specularTex.Sample(specularSmp, input.uv).rgb;
 
     float3 result = ambientTerm + diffuse + specular;
     return float4(result, 1.0f);
