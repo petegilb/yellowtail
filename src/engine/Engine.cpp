@@ -143,6 +143,10 @@ namespace ytail {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
+            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)) {
+                bRunning = false;
+                return;
+            }
             switch (event.type) {
                 case SDL_EVENT_QUIT:
                     bRunning = false;
@@ -199,7 +203,7 @@ namespace ytail {
 
         SDL_GPUColorTargetInfo colorTargetInfo = { nullptr };
         colorTargetInfo.texture = swapchainTexture;
-        colorTargetInfo.clear_color = SDL_FColor{ 0.3f, 0.4f, 0.5f, 1.0f };
+        colorTargetInfo.clear_color = SDL_FColor{ clear_color.x, clear_color.y, clear_color.z, clear_color.w };
         colorTargetInfo.load_op = SDL_GPU_LOADOP_CLEAR;
         colorTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
 
@@ -289,6 +293,9 @@ namespace ytail {
         if (keyboard_event.key == SDLK_ESCAPE) {
             quit();
         }
+        if (keyboard_event.key == SDLK_TAB) {
+            showDebugWindow = !showDebugWindow;
+        }
     }
 
     Entity * Engine::addEntity() {
@@ -318,6 +325,16 @@ namespace ytail {
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
 
+        // Setup Dear ImGui style
+        ImGui::StyleColorsDark();
+        //ImGui::StyleColorsLight();
+
+        // Setup scaling
+        float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.ScaleAllSizes(main_scale);
+        style.FontScaleDpi = main_scale;
+
         // Setup Platform/Renderer backends
         ImGui_ImplSDL3_InitForSDLGPU(window);
         ImGui_ImplSDLGPU3_InitInfo init_info = {};
@@ -327,14 +344,31 @@ namespace ytail {
         init_info.SwapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR;  // Only used in multi-viewports mode.
         init_info.PresentMode = SDL_GPU_PRESENTMODE_VSYNC;
         ImGui_ImplSDLGPU3_Init(&init_info);
+
+        //TODO load other fonts
+
+
     }
 
     void Engine::updateImGui(){
+        // reference: https://github.com/ocornut/imgui/blob/master/examples/example_sdl3_sdlgpu3/main.cpp
         // Start the Dear ImGui frame
         ImGui_ImplSDLGPU3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
-        ImGui::ShowDemoWindow(); // Show demo window! :)
+        ImGuiIO& io = ImGui::GetIO();
+
+        // ImGui::ShowDemoWindow(); // Show demo window! :)
+
+        // Debug window
+        if (showDebugWindow) {
+            ImGui::Begin("yellowtail!");
+            ImGui::Text("Debug Window...");
+            ImGui::ColorEdit3("clear color", (float*)&clear_color);
+            ImGui::SliderInt("FPS Lock", &framerateLock, -1, 999);
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+            ImGui::End();
+        }
     }
 
     void Engine::renderImGui(SDL_GPUCommandBuffer* commandBuffer){

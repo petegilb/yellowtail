@@ -12,6 +12,7 @@
 #include <SDL3_shadercross/SDL_shadercross.h>
 
 #include "Entity.h"
+#include "imgui.h"
 
 namespace ytail {
     class ResourceManager;
@@ -67,6 +68,8 @@ namespace ytail {
         void updateImGui();
         void renderImGui(SDL_GPUCommandBuffer* commandBuffer);
         void shutdownImGui();
+        ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+        bool showDebugWindow = false;
 };
 
 } // ytail
