@@ -11,6 +11,7 @@
 #include "components/RenderComponent.h"
 #include "components/TransformComponent.h"
 #include "components/CameraComponent.h"
+#include "components/LightComponent.h"
 #include "managers/ResourceManager.h"
 
 namespace ytail {
@@ -77,6 +78,13 @@ namespace ytail {
         camTransform->position = glm::vec3(0.0f, 3.0f, 5.0f);   // back up 5 units, looking down -Z toward origin
         camTransform->setRotationEuler(glm::vec3(-30.0f, 0.0f, 0.0f));
 
+        Entity* light0 = addEntity();
+        const auto lightTransform = light0->addComponent<TransformComponent>();
+        const auto lightComponent = light0->addComponent<LightComponent>();
+        lightComponent->color = glm::vec3(1.0f, 1.0f, 1.0f);
+        lightComponent->intensity = 5.0f;
+        lightTransform->position = glm::vec3(0.0f, 3.0f, -5.0f);
+
         Entity* cube = addEntity();
         cube->addComponent<TransformComponent>();
         auto cubeRender = cube->addComponent<RenderComponent>();
@@ -86,7 +94,16 @@ namespace ytail {
         cubeRender->setMesh(cubeMesh);
         // TODO how should this process work?
         auto material = std::make_shared<Material>();
-        material->pipelineType = PipelineType::UnlitStatic;
+        material->pipelineType = PipelineType::LitStatic;
+        // diffuse (color -> sRGB) at t0, specular (data mask -> linear) at t1, in slot order.
+        SDL_GPUSampler* sampler = resourceManager->getSampler(SamplerType::LinearWrap);
+        material->textures.push_back({ resourceManager->getTexture("textures/container2.png", true), sampler });
+        material->textures.push_back({ resourceManager->getTexture("textures/container2_specular.png", false), sampler });
+        // material uniform (b1 space3): just shininess for now.
+        MaterialUniform matUniform{};
+        matUniform.shininess = 32.0f;
+        material->uniformData.resize(sizeof(matUniform));
+        SDL_memcpy(material->uniformData.data(), &matUniform, sizeof(matUniform));
         cubeRender->addMaterial(material);
 
         mainLoop();
@@ -161,6 +178,8 @@ namespace ytail {
 
     void Engine::updateTick() {
         updateImGui();
+        ambientLight = {ambientDebug.x, ambientDebug.y, ambientDebug.z};
+        ambientLight *= ambientIntensity;
     }
 
     int Engine::renderTick() {
@@ -215,6 +234,23 @@ namespace ytail {
         // TODO add depth buffer here!
         SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(commandBuffer, &colorTargetInfo, 1, nullptr);
 
+        // Per-frame lighting: camera position + scene ambient + the first light in the scene.
+        // Pushed once to fragment slot 0 (FrameLighting @ b0 space3). This state persists for
+        // every draw in this command buffer, so all lit materials read the same light.
+        FrameLightingUniform frameLighting{};
+        frameLighting.viewPos = camXform->position;
+        frameLighting.ambient = ambientLight;
+        for (const auto& [lightIdx, lightEntity] : entities) {
+            if (lightEntity == nullptr) continue;
+            const auto* lightComp = lightEntity->getComponent<LightComponent>();
+            const auto* lightXform = lightEntity->getComponent<TransformComponent>();
+            if (lightComp == nullptr || lightXform == nullptr) continue;
+            frameLighting.lightPos   = lightXform->position;
+            frameLighting.lightColor = lightComp->color * lightComp->intensity;
+            break;  // single light for now
+        }
+        SDL_PushGPUFragmentUniformData(commandBuffer, 0, &frameLighting, sizeof(frameLighting));
+
         // for each render component and transform component, get the mesh and the material in order to render it
         // TODO optimize this by pipeline binding (rebinding the same pipeline multiple times is a waste of resources)
         for (const auto& [idx, entity]: entities) {
@@ -268,9 +304,10 @@ namespace ytail {
                         static_cast<Uint32>(binds.size())
                     );
                 }
-                // Push the uniform data (it's a vector of raw bytes)
+                // Push per-material uniform bytes to fragment slot 1 (Material b1 space3).
+                // Slot 0 is the FrameLighting buffer pushed once above.
                 if (!material->uniformData.empty()) {
-                    SDL_PushGPUFragmentUniformData(commandBuffer, 0, material->uniformData.data(),
+                    SDL_PushGPUFragmentUniformData(commandBuffer, 1, material->uniformData.data(),
                         static_cast<Uint32>(material->uniformData.size())
                     );
                 }
@@ -364,8 +401,10 @@ namespace ytail {
         if (showDebugWindow) {
             ImGui::Begin("yellowtail!");
             ImGui::Text("Debug Window...");
-            ImGui::ColorEdit3("clear color", (float*)&clear_color);
+            ImGui::ColorEdit3("Clear Color", (float*)&clear_color);
             ImGui::SliderInt("FPS Lock", &framerateLock, -1, 999);
+            ImGui::ColorEdit3("Ambient Light", (float*)&ambientDebug);
+            ImGui::SliderFloat("Ambient Intensity", &ambientIntensity, 0.0f, 10.0f);
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
             ImGui::End();
         }

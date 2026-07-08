@@ -10,9 +10,10 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3_shadercross/SDL_shadercross.h>
+#include "imgui.h"
+#include <glm/glm.hpp>
 
 #include "Entity.h"
-#include "imgui.h"
 
 namespace ytail {
     class ResourceManager;
@@ -54,6 +55,7 @@ namespace ytail {
         int entityCounter = 0;
 
         // world stuff
+        glm::vec3 ambientLight{0.0f}; // currently set to ambientDebug
         std::unordered_map<Uint32, std::unique_ptr<Entity>> entities;
 
         // The camera to render from this frame. Non-owning - the entity itself lives in
@@ -69,6 +71,8 @@ namespace ytail {
         void renderImGui(SDL_GPUCommandBuffer* commandBuffer);
         void shutdownImGui();
         ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+        ImVec4 ambientDebug = ImVec4(1.f, 1.f, 1.f, 1.00f);
+        float ambientIntensity = 1.0f;
         bool showDebugWindow = false;
 };
 

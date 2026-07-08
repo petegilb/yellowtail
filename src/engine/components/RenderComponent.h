@@ -21,6 +21,18 @@ namespace ytail {
         glm::mat4 normalMatrix;  // transpose(inverse(model)) → world-space normal
     };
 
+    // Mirrors cbuffer FrameLighting from BlinnPhongLit.frag.hlsl : register(b0, space3).
+    // Pushed once per frame to fragment uniform slot 0. Each glm::vec3 (12 bytes) + a float
+    // pad fills one 16-byte cbuffer row — HLSL packs vec3+float into a single register, so
+    // the pads keep C++ and shader offsets in lockstep. Don't drop or reorder the pads.
+    struct FrameLightingUniform {
+        glm::vec3 viewPos;    float _pad0;  // camera world position
+        glm::vec3 ambient;    float _pad1;  // scene ambient (added once, not per-light)
+        glm::vec3 lightPos;   float _pad2;
+        glm::vec3 lightColor; float _pad3;  // light emission (color * intensity)
+    };
+    static_assert(sizeof(FrameLightingUniform) == 64, "FrameLightingUniform must match the b0 cbuffer layout");
+
     class RenderComponent : public Component {
 public:
         std::vector<std::shared_ptr<Material>> materials;

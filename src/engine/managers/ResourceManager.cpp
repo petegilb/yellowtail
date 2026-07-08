@@ -326,12 +326,13 @@ namespace ytail {
 
         { // LitStatic
             // load shaders
-            // vertex : 1 uniform buffer  (Camera   cbuffer @ b0 space1)
-            // fragment : 2 samplers (diffuse t0, specular t1) + 1 uniform buffer (Lighting b0 space3)
+            // vertex : 1 uniform buffer  (Camera cbuffer @ b0 space1)
+            // fragment : 2 samplers (diffuse t0, specular t1) + 2 uniform buffers
+            // (FrameLighting b0 space3, Material b1 space3)
             SDL_GPUShader* vertexShader   = loadShader(device, "BlinnPhongLit.vert", 0,
                 1, 0, 0);
             SDL_GPUShader* fragmentShader = loadShader(device, "BlinnPhongLit.frag", 2,
-                1, 0, 0);
+                2, 0, 0);
             if (vertexShader == nullptr || fragmentShader == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load LitStatic shaders");
                 return;
