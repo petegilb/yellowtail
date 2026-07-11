@@ -32,17 +32,26 @@ public:
         std::shared_ptr<Texture> getTexture(const std::string& path, bool srgb = false);
         // get or load the mesh at the specified path
         std::shared_ptr<Mesh> getMesh(const std::string& path);
-        // get the pipeline based on the pipeline type
-        SDL_GPUGraphicsPipeline* getPipeline(PipelineType type);
+        // get the pipeline based on the pipeline type. When outline is true, lit pipelines are
+        // swapped for their stencil-stamping variant so the outline pass has a silhouette to mask.
+        SDL_GPUGraphicsPipeline* getPipeline(PipelineType type, bool outline = false);
 
         [[nodiscard]] SDL_GPUSampler* getSampler(SamplerType type) const {
             return samplers[static_cast<size_t>(type)];
         }
 
+        // Depth+stencil texture format chosen at construction. Engine uses this to build the
+        // per-frame depth buffer so the texture and the pipelines agree on the format.
+        [[nodiscard]] SDL_GPUTextureFormat getDepthStencilFormat() const { return depthStencilFormat; }
+
     private:
         SDL_GPUDevice* device = nullptr;
         SDL_Window* window = nullptr;
         const char* BasePath;
+
+        // Set in the constructor to a device-supported depth+stencil format (stencil is
+        // required for the outline mask). Prefers D24_S8, falls back to D32_S8.
+        SDL_GPUTextureFormat depthStencilFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT;
 
         // Resolve an assets-relative path (e.g. "models/cube.gltf") to an absolute path
         // next to the executable. Callers pass the short path; the cache still keys on it.

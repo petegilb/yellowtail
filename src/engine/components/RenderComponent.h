@@ -38,6 +38,10 @@ public:
         std::vector<std::shared_ptr<Material>> materials;
         std::shared_ptr<Mesh> mesh;
 
+        bool outline = false;
+        glm::vec3 outlineColor = glm::vec3(1.0f, 0.4f, 0.0f);
+        float outlineScale = 1.05f;
+
         void setMesh(std::shared_ptr<Mesh> inMesh);
         // TODO this just adds materials but what about if we don't have any yet? or resetting?
         void addMaterial(std::shared_ptr<Material> inMaterial);

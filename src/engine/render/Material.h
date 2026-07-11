@@ -25,8 +25,10 @@ namespace ytail {
 
     enum class PipelineType {
         LitStatic,
+        LitStaticStencil,
         LitSkeletal,
         UnlitStatic,
+        Outline,
         Count
     };
 

@@ -31,11 +31,9 @@ namespace ytail {
         shutdownImGui();
 
         // Release everything that owns GPU resources BEFORE destroying the device.
-        // These are members, so they'd otherwise be destroyed AFTER this body runs -
-        // i.e. after SDL_DestroyGPUDevice - and their SDL_Release* calls would hit a
-        // dangling device pointer (SIGSEGV on quit).
-        entities.clear();         // RenderComponents drop their shared_ptr<Mesh>/Material
-        resourceManager.reset();  // frees pipelines, samplers, and cached meshes/textures
+        entities.clear(); // RenderComponents drop their shared_ptr<Mesh>/Material
+        resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
+        if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
 
         SDL_ShaderCross_Quit();
         if (device && window) SDL_ReleaseWindowFromGPUDevice(device, window);
@@ -99,14 +97,7 @@ namespace ytail {
         lightComponent->intensity = 1.0f;
         lightTransform->position = glm::vec3(1.2f, 1.0f, 2.0f);  // camera side, up and to the right
 
-        Entity* cube = addEntity();
-        cube->addComponent<TransformComponent>();
-        auto cubeRender = cube->addComponent<RenderComponent>();
-        // add mesh and materials to render component
-        // TODO handle when a submesh doesn't have a material
-        std::shared_ptr<Mesh> cubeMesh = resourceManager->getMesh("models/cube.glb");
-        cubeRender->setMesh(cubeMesh);
-        // TODO how should this process work?
+        // create material
         auto material = std::make_shared<Material>();
         material->pipelineType = PipelineType::LitStatic;
         // diffuse (color -> sRGB) at t0, specular (data mask -> linear) at t1, in slot order.
@@ -120,7 +111,22 @@ namespace ytail {
         matUniform.shininess = 64.0f;
         material->uniformData.resize(sizeof(matUniform));
         SDL_memcpy(material->uniformData.data(), &matUniform, sizeof(matUniform));
+
+        Entity* cube = addEntity();
+        cube->addComponent<TransformComponent>();
+        auto cubeRender = cube->addComponent<RenderComponent>();
+        // add mesh and materials to render component
+        std::shared_ptr<Mesh> cubeMesh = resourceManager->getMesh("models/cube.glb");
+        cubeRender->setMesh(cubeMesh);
         cubeRender->addMaterial(material);
+
+        Entity* cube2 = addEntity();
+        auto cube2Transform = cube2->addComponent<TransformComponent>();
+        auto cube2Render = cube2->addComponent<RenderComponent>();
+        cube2Render->setMesh(cubeMesh);
+        cube2Render->addMaterial(material);
+        cube2Render->outline = true;
+        cube2Transform->position = glm::vec3(2.0f, -1.0f, -5.0f);;
 
         mainLoop();
         return 0;
@@ -198,6 +204,27 @@ namespace ytail {
         ambientLight *= ambientIntensity;
     }
 
+    void Engine::ensureDepthTexture(int width, int height) {
+        // if the depth texture already matches, we've ensured it's okay, otherwise recreate.
+        if (depthTexture && depthTextureW == width && depthTextureH == height) return;
+        if (depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
+
+        SDL_GPUTextureCreateInfo info = {};
+        info.type                 = SDL_GPU_TEXTURETYPE_2D;
+        info.format               = resourceManager->getDepthStencilFormat();
+        info.usage                = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+        info.width                = static_cast<Uint32>(width);
+        info.height               = static_cast<Uint32>(height);
+        info.layer_count_or_depth = 1;
+        info.num_levels           = 1;
+        depthTexture = SDL_CreateGPUTexture(device, &info);
+        depthTextureW = width;
+        depthTextureH = height;
+        if (depthTexture == nullptr) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create depth texture: %s", SDL_GetError());
+        }
+    }
+
     int Engine::renderTick() {
         drawCallsLastFrame = 0;
         // just found this reference: https://dawaralvi.github.io/sdl-gpu/
@@ -211,6 +238,7 @@ namespace ytail {
         int w, h;
         SDL_GetWindowSizeInPixels(window, &w, &h);
         if (h == 0) return 0;
+        ensureDepthTexture(w, h);
         const float aspect = static_cast<float>(w) / static_cast<float>(h);
         glm::mat4 view = glm::inverse(camXform->modelMatrix());
         glm::mat4 projection = camComp->projectionMatrix(aspect);
@@ -247,10 +275,24 @@ namespace ytail {
         // ImGui uploads its vertex/index data here -- needs to be before BeginRenderPass
         renderImGui(commandBuffer);
 
+        // Depth+stencil attachment for the geometry pass. Depth clears to the far plane (1.0);
+        // stencil clears to 0. Neither is needed after the frame, so we don't store them.
+        // https://github.com/TheSpydog/SDL_gpu_examples/blob/main/Examples/DepthArray.c
+        SDL_GPUDepthStencilTargetInfo depthTargetInfo = {};
+        depthTargetInfo.texture          = depthTexture;
+        depthTargetInfo.clear_depth      = 1.0f;
+        depthTargetInfo.load_op          = SDL_GPU_LOADOP_CLEAR;
+        depthTargetInfo.store_op         = SDL_GPU_STOREOP_DONT_CARE;
+        depthTargetInfo.stencil_load_op  = SDL_GPU_LOADOP_CLEAR;
+        depthTargetInfo.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        depthTargetInfo.clear_stencil    = 0;
+        depthTargetInfo.cycle            = true;
+
         // render all pipelines for all materials here...
-        // we are only using one render pass, when would we want to use more than one?
-        // TODO add depth buffer here!
-        SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(commandBuffer, &colorTargetInfo, 1, nullptr);
+        SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(commandBuffer, &colorTargetInfo, 1, &depthTargetInfo);
+
+        // Stencil reference used by both the LitStaticStencil stamp and the Outline test.
+        SDL_SetGPUStencilReference(renderPass, 1);
 
         // Per-frame lighting: camera position + scene ambient + the first light in the scene.
         // Pushed once to fragment slot 0 (FrameLighting @ b0 space3). This state persists for
@@ -300,11 +342,17 @@ namespace ytail {
             const auto& materials = renderComponent->materials;
 
             for (const Submesh& submesh : mesh->submeshes) {
-                if (submesh.materialSlot >= materials.size()) continue;
+                if (submesh.materialSlot >= materials.size()){
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "The mesh %s mat slot %d doesn't have a material!", mesh->name.c_str(), submesh.materialSlot);
+                    continue;
+                }
                 const auto& material = materials[submesh.materialSlot];
-                if (!material) continue;
+                if (!material){
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "The mesh %s mat slot %d material is invalid!", mesh->name.c_str(), submesh.materialSlot);
+                    continue;
+                }
 
-                SDL_GPUGraphicsPipeline* pipeline = resourceManager->getPipeline(material->pipelineType);
+                SDL_GPUGraphicsPipeline* pipeline = resourceManager->getPipeline(material->pipelineType, renderComponent->outline);
                 if (!pipeline) continue;
                 SDL_BindGPUGraphicsPipeline(renderPass, pipeline);
                 if (!material->textures.empty()){
@@ -338,10 +386,54 @@ namespace ytail {
             }
         }
 
-        // Draw UI as the last thing in the scene pass so it composites on top.
-        ImGui_ImplSDLGPU3_RenderDrawData(ImGui::GetDrawData(), commandBuffer, renderPass);
+        // Outline pass: for each outlined object, draw a slightly scaled shell in a flat color.
+        // The stencil test (NOT_EQUAL 1) in the Outline pipeline clips it to the ring just outside
+        // the silhouette that LitStatic stamped above. Runs after all lit draws so it doesn't
+        // clobber the FrameLighting uniform (both use fragment slot 0).
+        SDL_GPUGraphicsPipeline* outlinePipeline = resourceManager->getPipeline(PipelineType::Outline);
+        if (outlinePipeline) {
+            SDL_BindGPUGraphicsPipeline(renderPass, outlinePipeline);
+            for (const auto& [idx, entity] : entities) {
+                if (entity == nullptr) continue;
+                const auto* renderComponent = entity->getComponent<RenderComponent>();
+                const auto* transformComponent = entity->getComponent<TransformComponent>();
+                if (renderComponent == nullptr || transformComponent == nullptr) continue;
+                if (!renderComponent->outline) continue;
+                const auto& mesh = renderComponent->mesh;
+                if (!mesh) continue;
+
+                SDL_GPUBufferBinding vertexBinding { .buffer = mesh->vertexBuffer, .offset = 0 };
+                SDL_GPUBufferBinding indexBinding { .buffer = mesh->indexBuffer, .offset = 0 };
+                SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
+                SDL_BindGPUIndexBuffer(renderPass, &indexBinding, mesh->indexSize);
+
+                // Scale the model about its local origin so the shell pokes out past the mesh.
+                const glm::mat4 model = transformComponent->modelMatrix()
+                    * glm::scale(glm::mat4(1.0f), glm::vec3(renderComponent->outlineScale));
+                VertexUniform vsu{ projection * view * model, model, glm::mat4(1.0f) };
+                SDL_PushGPUVertexUniformData(commandBuffer, 0, &vsu, sizeof(vsu));
+
+                const glm::vec4 outlineColor{ renderComponent->outlineColor, 1.0f };
+                SDL_PushGPUFragmentUniformData(commandBuffer, 0, &outlineColor, sizeof(outlineColor));
+
+                for (const Submesh& submesh : mesh->submeshes) {
+                    SDL_DrawGPUIndexedPrimitives(renderPass, submesh.indexCount, 1,
+                        submesh.indexOffset, 0, 0);
+                    drawCallsLastFrame++;
+                }
+            }
+        }
 
         SDL_EndGPURenderPass(renderPass);
+
+        // UI pass: composite ImGui on top of the finished scene. Color-only (no depth target)
+        SDL_GPUColorTargetInfo uiTargetInfo = colorTargetInfo;
+        uiTargetInfo.load_op  = SDL_GPU_LOADOP_LOAD;
+        uiTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* uiPass = SDL_BeginGPURenderPass(commandBuffer, &uiTargetInfo, 1, nullptr);
+        ImGui_ImplSDLGPU3_RenderDrawData(ImGui::GetDrawData(), commandBuffer, uiPass);
+        SDL_EndGPURenderPass(uiPass);
+
         SDL_SubmitGPUCommandBuffer(commandBuffer);
         return 0;
     }

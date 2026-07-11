@@ -38,6 +38,9 @@ namespace ytail {
 
         int renderTick();
 
+        // Create (or resize) the depth+stencil texture to match the given pixel size.
+        void ensureDepthTexture(int width, int height);
+
         void handleInput(const SDL_KeyboardEvent& keyboard_event);
 
         Entity* addEntity();
@@ -50,6 +53,11 @@ namespace ytail {
         SDL_GPUDevice* device = nullptr;
         const char* BasePath = nullptr;
         bool bUsingSRGB = false;
+
+        // Depth+stencil target, recreated when the window size changes (see ensureDepthTexture).
+        SDL_GPUTexture* depthTexture = nullptr;
+        int depthTextureW = 0;
+        int depthTextureH = 0;
 
         // locks the framerate if greater than 0
         int framerateLock = 60;
