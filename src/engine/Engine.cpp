@@ -105,12 +105,11 @@ namespace ytail {
         material->textures.push_back({ resourceManager->getTexture("textures/container2.png", true), sampler });
         material->textures.push_back({ resourceManager->getTexture("textures/container2_specular.png", false), sampler });
         // material uniform (b1 space3): just shininess for now.
-        MaterialUniform matUniform{};
         // https://learnopengl.com/Advanced-Lighting/Advanced-Lighting
         // hardcoded exponent value to 64
+        MaterialUniform matUniform{};
         matUniform.shininess = 64.0f;
-        material->uniformData.resize(sizeof(matUniform));
-        SDL_memcpy(material->uniformData.data(), &matUniform, sizeof(matUniform));
+        material->setUniform(matUniform);
 
         Entity* cube = addEntity();
         cube->addComponent<TransformComponent>();
@@ -127,6 +126,24 @@ namespace ytail {
         cube2Render->addMaterial(material);
         cube2Render->outline = true;
         cube2Transform->position = glm::vec3(2.0f, -1.0f, -5.0f);;
+
+        // create floor
+        auto floorMaterial = std::make_shared<Material>();
+        floorMaterial->pipelineType = PipelineType::LitStatic;
+        floorMaterial->textures.push_back({ resourceManager->getTexture("textures/wood.png", true), sampler });
+        floorMaterial->textures.push_back({ resourceManager->getSolidTexture(255), sampler });
+        MaterialUniform floorMatUniform{};
+        floorMatUniform.shininess = 64.0f;
+        floorMatUniform.uvScale = glm::vec2(4.00f);
+        floorMaterial->setUniform(floorMatUniform);
+
+        Entity* floor = addEntity();
+        auto floorTransform = floor->addComponent<TransformComponent>();
+        floorTransform->position = glm::vec3(0.0f, -2.0f, 0.0f);
+        auto floorRender = floor->addComponent<RenderComponent>();
+        std::shared_ptr<Mesh> floorMesh = resourceManager->getMesh("models/floor.glb");
+        floorRender->setMesh(floorMesh);
+        floorRender->addMaterial(floorMaterial);
 
         mainLoop();
         return 0;

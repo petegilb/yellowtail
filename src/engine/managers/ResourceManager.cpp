@@ -117,6 +117,62 @@ namespace ytail {
         return textures[path];
     }
 
+    std::shared_ptr<Texture> ResourceManager::getSolidTexture(Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
+        // Cache in the same map as file textures, keyed by a synthetic name so identical colors
+        // share one GPU texture (the "__" prefix can't collide with an assets-relative path).
+        char key[24];
+        SDL_snprintf(key, sizeof(key), "__solid_%02x%02x%02x%02x", r, g, b, a);
+        if (textures.contains(key)) return textures[key];
+
+        // Linear UNORM (not sRGB): these stand in for data masks like specular, which sample linear.
+        const SDL_GPUTextureCreateInfo texInfo = {
+            .type                 = SDL_GPU_TEXTURETYPE_2D,
+            .format               = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            .usage                = SDL_GPU_TEXTUREUSAGE_SAMPLER,
+            .width                = 1,
+            .height               = 1,
+            .layer_count_or_depth = 1,
+            .num_levels           = 1,
+        };
+        SDL_GPUTexture* gpuTexture = SDL_CreateGPUTexture(device, &texInfo);
+
+        // Stage the single RGBA8 texel and copy it into the texture.
+        const Uint8 pixel[4] = { r, g, b, a };
+        SDL_GPUTransferBufferCreateInfo tbInfo = {};
+        tbInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        tbInfo.size  = sizeof(pixel);
+        SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(device, &tbInfo);
+
+        void* mapped = SDL_MapGPUTransferBuffer(device, transferBuffer, false);
+        SDL_memcpy(mapped, pixel, sizeof(pixel));
+        SDL_UnmapGPUTransferBuffer(device, transferBuffer);
+
+        SDL_GPUCommandBuffer* uploadCmd = SDL_AcquireGPUCommandBuffer(device);
+        SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(uploadCmd);
+
+        SDL_GPUTextureTransferInfo src = {};
+        src.transfer_buffer = transferBuffer;
+        src.offset = 0;
+
+        SDL_GPUTextureRegion dst = {};
+        dst.texture = gpuTexture;
+        dst.w = 1;
+        dst.h = 1;
+        dst.d = 1;
+
+        SDL_UploadToGPUTexture(copyPass, &src, &dst, false);
+        SDL_EndGPUCopyPass(copyPass);
+        SDL_SubmitGPUCommandBuffer(uploadCmd);
+        SDL_ReleaseGPUTransferBuffer(device, transferBuffer);
+
+        textures.insert({ key, std::make_shared<Texture>(device, gpuTexture, 1, 1) });
+        return textures[key];
+    }
+
+    std::shared_ptr<Texture> ResourceManager::getSolidTexture(Uint8 x){
+        return getSolidTexture(x, x, x, 255);
+    }
+
     std::shared_ptr<Mesh> ResourceManager::getMesh(const std::string &path) {
         if (meshes.contains(path)) return meshes[path];
 

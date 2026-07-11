@@ -8,20 +8,11 @@
 #include <memory>
 #include <vector>
 #include <SDL3/SDL.h>
+#include <glm/glm.hpp>
 
 #include "Texture.h"
 
 namespace ytail {
-    // class Material {
-    //
-    //     // "Many materials share the same pipeline. A red crate and a blue crate use the same shaders and same render
-    //     // state. they differ only in a color uniform and a texture. You do not want a new pipeline (or to
-    //     // reload shaders) for those; you bind the same pipeline and just push different uniforms/textures."
-    //
-    //     // should be "many materials → one pipeline"
-    // };
-
-    // TODO temp example to try to understand the setup for this.
 
     enum class PipelineType {
         LitStatic,
@@ -33,11 +24,15 @@ namespace ytail {
     };
 
     // Mirrors cbuffer Material from BlinnPhongLit.frag.hlsl : register(b1, space3).
+    // Field order matches HLSL 16-byte packing: the two vec2s fill the first row, shininess
+    // starts the second. uvScale defaults to 1 (no tiling), uvOffset to 0 (no shift).
     struct MaterialUniform {
+        glm::vec2 uvScale  = glm::vec2(1.0f);  // multiply UVs (tiling)
+        glm::vec2 uvOffset = glm::vec2(0.0f);  // add to UVs after scaling (shift/scroll)
         float shininess = 64.0f;
         float _pad[3] = {};
     };
-    static_assert(sizeof(MaterialUniform) == 16, "MaterialUniform must match the b1 cbuffer row size");
+    static_assert(sizeof(MaterialUniform) == 32, "MaterialUniform must match the b1 cbuffer layout");
 
     enum class SamplerType {
         PointClamp,
@@ -67,9 +62,15 @@ namespace ytail {
         // uniform data in raw bytes
         // we can later change this so that child classes fill this uniform data with a struct but this was an easy
         // and extendable way to do it from the start.
-        // you can fill it by copying a struct with std::memcpy to this uniformData
-        // or maybe SDL_memcpy is better than std...?
+        // you can fill it by copying a struct with SDL_memcpy to this uniformData
         std::vector<Uint8> uniformData;
+
+        // convenience wrapper for the above: copies a uniform struct into uniformData
+        template <typename T>
+        void setUniform(const T& data) {
+            uniformData.resize(sizeof(T));
+            SDL_memcpy(uniformData.data(), &data, sizeof(T));
+        }
     };
 } // ytail
 

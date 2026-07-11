@@ -30,6 +30,9 @@ public:
         // srgb=true for color textures (albedo/diffuse) so the GPU does gamma-correct
         // sampling; false for data textures (normal/roughness/metallic/masks).
         std::shared_ptr<Texture> getTexture(const std::string& path, bool srgb = false);
+        // get or create a cached 1x1 solid-color texture (linear)
+        std::shared_ptr<Texture> getSolidTexture(Uint8 r, Uint8 g, Uint8 b, Uint8 a = 255);
+        std::shared_ptr<Texture> getSolidTexture(Uint8 x);
         // get or load the mesh at the specified path
         std::shared_ptr<Mesh> getMesh(const std::string& path);
         // get the pipeline based on the pipeline type. When outline is true, lit pipelines are
