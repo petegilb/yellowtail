@@ -8,38 +8,46 @@ Cross-platform SDL3 project. Used as a playground and to learn to code games wit
 
 Open the project in CLion - it'll configure into `cmake-build-debug/` and `cmake-build-release/` automatically. Build/run via the toolbar, or from a terminal:
 
+The build produces two executables that share a common `engine` static library: `ytail_game`
+(the game) and `ytail_editor` (the editor host). Build and run whichever you want:
+
 ```sh
-cmake --build cmake-build-debug -j
-./cmake-build-debug/yellowtail/yellowtail
+cmake --build cmake-build-debug --target ytail_game -j
+./cmake-build-debug/ytail_game/ytail_game
+# or the editor:
+cmake --build cmake-build-debug --target ytail_editor -j
+./cmake-build-debug/ytail_editor/ytail_editor
 ```
 
 The first clean configure takes **5 to 15 minutes**. It clones and builds SDL3, plus DXC (DirectX Shader Compiler, a fork of LLVM/Clang pulled in by SDL_shadercross) and SPIRV-Cross from source. Subsequent incremental builds are fast because everything is cached under `cmake-build-debug/_deps/`. **Avoid deleting the build dir** unless you actually need to reconfigure from scratch.
 
-**One CLion pitfall on Windows.** DXC ships a standalone `clang` executable target (`tools/clang/tools/driver`) whose `cc1_main.cpp` / `cc1as_main.cpp` call stale `llvm::opt` / `CompilerInstance` APIs. It will not compile against modern MSVC. Yellowtail never links `clang`, and DXC's own CMake marks it `EXCLUDE_FROM_ALL`, but CLion's "Build Project" (`Ctrl+F9`) runs `ninja all`, which re-includes it. Make sure the Run/Debug configuration's **Before launch** step builds the `yellowtail` target specifically, not "Project":
+**One CLion pitfall on Windows.** DXC ships a standalone `clang` executable target (`tools/clang/tools/driver`) whose `cc1_main.cpp` / `cc1as_main.cpp` call stale `llvm::opt` / `CompilerInstance` APIs. It will not compile against modern MSVC. Yellowtail never links `clang`, and DXC's own CMake marks it `EXCLUDE_FROM_ALL`, but CLion's "Build Project" (`Ctrl+F9`) runs `ninja all`, which re-includes it. Make sure the Run/Debug configuration's **Before launch** step builds a specific executable target (`ytail_game` or `ytail_editor`), not "Project":
 
 1. Toolbar, **Edit Configurations...**
-2. Select the yellowtail run config, then the **Before launch** panel at the bottom.
-3. Remove any "Build 'Project'" entry; add **Build** with target = `yellowtail`.
+2. Select the run config, then the **Before launch** panel at the bottom.
+3. Remove any "Build 'Project'" entry; add **Build** with target = `ytail_game` (or `ytail_editor`).
 
-Then the play button only builds `yellowtail`'s dependency chain (`dxcompiler`, `dxildll`, SPIRV-Cross, etc.) and never touches the broken standalone `clang`.
+Then the play button only builds that target's dependency chain (`engine`, `dxcompiler`, `dxildll`, SPIRV-Cross, etc.) and never touches the broken standalone `clang`.
 
 ## Project layout
 
 ```
 yellowtail/
-├── CMakeLists.txt        # top-level build
+├── CMakeLists.txt        # top-level: fetches deps, then add_subdirectory(src)
 ├── src/
-│   ├── CMakeLists.txt    # globs *.cpp, *.c, *.h
-│   ├── main.cpp
-│   └── ...               # all C++ source/header files go here
+│   ├── CMakeLists.txt    # engine static lib + ytail_game / ytail_editor exes
+│   ├── engine/           # engine runtime -> static `engine` library
+│   ├── game/main.cpp     # ytail_game entry point
+│   └── editor/main.cpp   # ytail_editor entry point
 ├── external/             # third-party single-header libraries
 │   └── cgltf.h
 └── assets/               # textures, models, audio, shaders - anything loaded at runtime
 ```
 
-- **`src/`** - drop new `.cpp`, `.c`, and `.h` files anywhere under here (subdirectories work too). `src/CMakeLists.txt` globs `*.cpp`, `*.c`, and `*.h` recursively with `CONFIGURE_DEPENDS`, so no need to edit CMake when adding files. Re-run the build and they're picked up.
+- **`src/engine/`** - compiled into the `engine` static library, shared by both executables (UI code lives under `engine/ui/`). `src/CMakeLists.txt` globs `engine/*.cpp`/`*.c`/`*.h` recursively with `CONFIGURE_DEPENDS`, so new engine files are picked up without editing CMake. Drop new engine code under here.
+- **`src/game/`, `src/editor/`** - the two executables that link `engine`, each globbed recursively (same as `engine/`), so new files under either dir are picked up without editing CMake. Both currently just run the engine; the editor becomes a distinct host once the engine exposes a game seam.
 - **`external/`** - for single-header / drop-in third-party code (cgltf is here). Added to the include path, so `#include <cgltf.h>` works. Prefer `FetchContent` in `CMakeLists.txt` for anything with its own build system; reserve `external/` for headers you copy into the repo.
-- **`assets/`** - runtime resources. Everything under here is copied to `<build>/yellowtail/assets/` after every build (debug *and* release), so the binary always has its assets next to it. Load at runtime via `SDL_GetBasePath()` + `"assets/..."` - see [Loading assets](#loading-assets) below.
+- **`assets/`** - runtime resources. Everything under here is copied next to *each* executable (`<build>/ytail_game/assets/`, `<build>/ytail_editor/assets/`) after every build (debug *and* release), so each binary always has its assets beside it. Load at runtime via `SDL_GetBasePath()` + `"assets/..."` - see [Loading assets](#loading-assets) below.
 
 ## Dependencies
 
@@ -86,12 +94,12 @@ A few non-obvious decisions in `CMakeLists.txt`:
 - **`SDLSHADERCROSS_VENDORED=ON`, `SDLSHADERCROSS_CLI=OFF`, `SDLSHADERCROSS_DXC=ON`** bundle SPIRV-Cross and DXC (we don't want to depend on system-installed shader compilers), skip building the offline `shadercross` CLI (we don't use it in pattern #1), and keep DXC enabled so HLSL works at runtime. `SDLSHADERCROSS_SPIRVCROSS_SHARED=OFF` matches our mostly-static policy. DXC's broken standalone `clang` executable (`tools/clang/tools/driver`) is left excluded by DXC's own `HLSL_OPTIONAL_PROJS_IN_DEFAULT=OFF` default; the CLion Run-config guidance in "Build" above keeps `ninja all` from pulling it in anyway.
 - **SDL_shadercross is pinned to a `main` commit SHA, not a tag** - the project has no tagged releases yet. Bump the SHA manually when you want updates.
 - **Dear ImGui is built as a hand-rolled `add_library(imgui STATIC ...)`** - ImGui upstream deliberately doesn't ship a CMakeLists.txt. We pick exactly the backends we use (`imgui_impl_sdl3` + `imgui_impl_sdlgpu3`), so the lib only carries what we link. To add another backend, append the `.cpp` to the source list in the ImGui block.
-- **Clay ships a CMakeLists.txt that builds examples, not a consumer library.** Its commented-out `add_library(clay INTERFACE)` line at the bottom is the giveaway. We set `CLAY_INCLUDE_ALL_EXAMPLES=OFF` (plus every per-backend toggle) before `FetchContent_MakeAvailable(clay)` to suppress example targets, then add `${clay_SOURCE_DIR}` to our include path manually and compile `src/ui/clay/clay_impl.c` (which defines `CLAY_IMPLEMENTATION` and includes `<clay.h>`). We do not include Clay's bundled SDL3 renderer; see "Clay UI" for why. `clay_impl.c` stays a `.c` file for now to keep the door open for later including a C99 renderer; `src/CMakeLists.txt` globs both `*.cpp` and `*.c` so it's picked up regardless.
+- **Clay ships a CMakeLists.txt that builds examples, not a consumer library.** Its commented-out `add_library(clay INTERFACE)` line at the bottom is the giveaway. We set `CLAY_INCLUDE_ALL_EXAMPLES=OFF` (plus every per-backend toggle) before `FetchContent_MakeAvailable(clay)` to suppress example targets, then add `${clay_SOURCE_DIR}` to our include path manually and compile `src/engine/ui/clay/clay_impl.c` (which defines `CLAY_IMPLEMENTATION` and includes `<clay.h>`). We do not include Clay's bundled SDL3 renderer; see "Clay UI" for why. `clay_impl.c` stays a `.c` file for now to keep the door open for later including a C99 renderer; `src/CMakeLists.txt` globs `engine/*.cpp` and `engine/*.c` so it's picked up regardless.
 - **Jolt's `Build/CMakeLists.txt` mutates `CMAKE_CXX_FLAGS` globally** (`-fno-rtti`, `-fno-exceptions`, `-Wall -Werror`, MSVC equivalents). We save `CMAKE_CXX_FLAGS` before `FetchContent_MakeAvailable(JoltPhysics)` and restore it after, so the rest of yellowtail compiles with its normal flags. We also set `OVERRIDE_CXX_FLAGS=OFF`, `ENABLE_ALL_WARNINGS=OFF`, and `INTERPROCEDURAL_OPTIMIZATION=OFF` to keep Jolt's own build well-behaved. Don't drop these or reorder the block without moving the save/restore with it.
 - **`SDLIMAGE_VENDORED=OFF` + `SDLIMAGE_BACKEND_STB=ON`** - uses SDL_image's bundled `stb_image` for PNG/JPG decoding instead of building vendored copies of libpng/libjpeg/libwebp/libavif. Faster build, fewer transitive deps, covers every format we care about. AVIF/JXL/TIF/WebP are disabled explicitly for the same reason.
 - **No manual `-framework Cocoa` / `IOKit` / etc. on macOS** - SDL3's static target already propagates every macOS framework it needs via its `INTERFACE_LINK_LIBRARIES` (see SDL3's `sdl_link_dependency(...)` calls). Linking `SDL3::SDL3-static` is enough.
 - **No manual `ws2_32` / `winmm` on Windows** - same reason: enet adds `ws2_32` and SDL3 adds `winmm` via their public link interfaces.
 - **`MultiThreaded$<$<CONFIG:Debug>:Debug>`** for `CMAKE_MSVC_RUNTIME_LIBRARY` - statically links the CRT on MSVC. Note: appending `$<$<CONFIG:Release>:Release>` (a common copy-paste pattern) produces the invalid value `MultiThreadedRelease` in Release builds and silently falls back to the DLL runtime.
 - **`/arch:AVX2`** on MSVC - assumes a reasonably modern CPU. Drop this if you need to target older hardware.
-- **`add_custom_command(... POST_BUILD copy_directory assets ...)`** - runs every build, into `$<TARGET_FILE_DIR:${PROJECT_NAME}>` which resolves per-configuration. Both `cmake-build-debug/yellowtail/assets/` and `cmake-build-release/yellowtail/assets/` stay in sync automatically.
+- **`add_custom_command(... POST_BUILD copy_directory assets ...)`** - runs every build, into `$<TARGET_FILE_DIR:${target}>` which resolves per-configuration. Applied to each executable via the `yt_configure_app()` helper, so e.g. `cmake-build-debug/ytail_game/assets/` and `cmake-build-release/ytail_game/assets/` (and the `ytail_editor` equivalents) stay in sync automatically.
 - **`file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`** in `src/CMakeLists.txt` - the `CONFIGURE_DEPENDS` flag makes CMake re-run globbing on every build, so new files appear without manually re-running `cmake -S . -B build`. Slight build-time cost; worth it for ergonomics.

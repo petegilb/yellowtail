@@ -35,6 +35,7 @@ FetchContent_Declare(SDL3_image
         GIT_REPOSITORY https://github.com/libsdl-org/SDL_image.git
         GIT_TAG release-3.4.4
         GIT_SHALLOW TRUE
+        GIT_SUBMODULES ""
 )
 FetchContent_MakeAvailable(SDL3_image)
 
@@ -104,7 +105,7 @@ FetchContent_MakeAvailable(enet)
 # --- Clay (immediate-mode UI layout - single-header lib + SDL3 renderer .c file) ---
 # Clay ships a CMakeLists.txt that ONLY builds examples, no consumer library target.
 # We disable all the example switches, fetch the source, and pull clay.h + the SDL3
-# renderer into our own TU (see src/clay_impl.c). Renderer functions are `static`,
+# renderer into our own TU (see src/engine/ui/clay/clay_impl.c). Renderer functions are `static`,
 # so they must be #include'd, not linked. Renderer requires SDL3_ttf and SDL3_image
 # (we already have both).
 set(CLAY_INCLUDE_ALL_EXAMPLES   OFF CACHE BOOL "" FORCE)
@@ -158,57 +159,7 @@ FetchContent_MakeAvailable(JoltPhysics)
 set(CMAKE_CXX_FLAGS "${_yt_saved_cxx_flags}")
 unset(_yt_saved_cxx_flags)
 
-# --- Target ---
-add_executable(${PROJECT_NAME})
+# --- Targets ---
+# The engine static library plus the ytail_game / ytail_editor executables that link it,
+# along with their per-app output-dir and asset/DLL copy steps, are all defined in src/.
 add_subdirectory(src)
-
-target_include_directories(${PROJECT_NAME} PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/external"
-        "${JoltPhysics_SOURCE_DIR}/.."
-        "${clay_SOURCE_DIR}"
-)
-target_link_libraries(${PROJECT_NAME} PRIVATE
-        SDL3::SDL3-static
-        SDL3_image::SDL3_image-static
-        SDL3_ttf::SDL3_ttf-static
-        SDL3_shadercross::SDL3_shadercross-static
-        imgui
-        enet::enet_static
-        Jolt
-        glm::glm
-)
-
-# GLM defaults to OpenGL's [-1, 1] clip-space Z; SDL_GPU (Vulkan/D3D12/Metal) wants [0, 1].
-# Applying this everywhere keeps perspectiveRH/orthoRH and friends honest.
-target_compile_definitions(${PROJECT_NAME} PRIVATE
-        GLM_FORCE_DEPTH_ZERO_TO_ONE
-        GLM_ENABLE_EXPERIMENTAL
-)
-
-set_target_properties(${PROJECT_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PROJECT_NAME})
-set_property(TARGET ${PROJECT_NAME} PROPERTY VS_DEBUGGER_WORKING_DIRECTORY $<TARGET_FILE_DIR:${PROJECT_NAME}>)
-
-# --- Copy assets next to the executable (per-config; works in debug and release) ---
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CMAKE_CURRENT_SOURCE_DIR}/assets"
-                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/assets"
-        COMMENT "Copying assets to output directory"
-)
-
-# --- Windows: copy DXC runtime DLLs next to the executable ---
-# dxcompiler is always SHARED (DXC forces it). Without our build next to the
-# exe, Windows loads System32's dxcompiler.dll by mistake.
-if(WIN32)
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "$<TARGET_FILE:dxcompiler>"
-                    "$<TARGET_FILE:dxildll>"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-            COMMENT "Copying dxcompiler.dll + dxil.dll next to executable"
-    )
-endif()
-
-if (WIN32 AND MINGW)
-    target_link_options(${PROJECT_NAME} PRIVATE -mwindows)
-endif()
