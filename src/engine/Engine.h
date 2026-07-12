@@ -41,6 +41,9 @@ namespace ytail {
         // Create (or resize) the depth+stencil texture to match the given pixel size.
         void ensureDepthTexture(int width, int height);
 
+        // Switch the swapchain present mode at runtime (VSYNC/MAILBOX/IMMEDIATE)
+        void setPresentMode(SDL_GPUPresentMode mode);
+
         void handleInput(const SDL_KeyboardEvent& keyboard_event);
 
         Entity* addEntity();
@@ -59,8 +62,12 @@ namespace ytail {
         int depthTextureW = 0;
         int depthTextureH = 0;
 
+        // Recorded so a present-mode change re-applies the same composition
+        SDL_GPUSwapchainComposition swapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR;
+        SDL_GPUPresentMode presentMode = SDL_GPU_PRESENTMODE_VSYNC;
+
         // locks the framerate if greater than 0
-        int framerateLock = 60;
+        int framerateLock = 0;
         int entityCounter = 0;
         int drawCallsLastFrame = 0;
 

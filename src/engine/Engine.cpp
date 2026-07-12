@@ -67,8 +67,8 @@ namespace ytail {
         // Must run before pipelines/ImGui query the swapchain format (they pick up the _SRGB variant).
         if (SDL_WindowSupportsGPUSwapchainComposition(device, window,
                 SDL_GPU_SWAPCHAINCOMPOSITION_SDR_LINEAR)) {
-            SDL_SetGPUSwapchainParameters(device, window,
-                SDL_GPU_SWAPCHAINCOMPOSITION_SDR_LINEAR, SDL_GPU_PRESENTMODE_VSYNC);
+            swapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR_LINEAR;
+            SDL_SetGPUSwapchainParameters(device, window, swapchainComposition, presentMode);
             bUsingSRGB = true;
         } else {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -240,6 +240,20 @@ namespace ytail {
         if (depthTexture == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create depth texture: %s", SDL_GetError());
         }
+    }
+
+    void Engine::setPresentMode(SDL_GPUPresentMode mode) {
+        if (mode == presentMode) return;
+        if (!SDL_WindowSupportsGPUPresentMode(device, window, mode)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Present mode %d unsupported on this device", mode);
+            return;
+        }
+        // Re-apply with the same composition we picked in run() so gamma handling is unchanged.
+        if (!SDL_SetGPUSwapchainParameters(device, window, swapchainComposition, mode)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "SetGPUSwapchainParameters failed: %s", SDL_GetError());
+            return;
+        }
+        presentMode = mode;
     }
 
     int Engine::renderTick() {
@@ -552,6 +566,16 @@ namespace ytail {
             ImGui::Text("Debug Window...");
             ImGui::ColorEdit3("Clear Color", (float*)&clear_color);
             ImGui::SliderInt("FPS Lock", &framerateLock, -1, 999);
+
+            const char* presentModeNames[] = { "Vsync", "Mailbox", "Immediate" };
+            const SDL_GPUPresentMode presentModeValues[] = {
+                SDL_GPU_PRESENTMODE_VSYNC, SDL_GPU_PRESENTMODE_MAILBOX, SDL_GPU_PRESENTMODE_IMMEDIATE
+            };
+            int presentModeIdx = 0;
+            for (int i = 0; i < 3; ++i) if (presentModeValues[i] == presentMode) presentModeIdx = i;
+            if (ImGui::Combo("Present Mode", &presentModeIdx, presentModeNames, 3)) {
+                setPresentMode(presentModeValues[presentModeIdx]);
+            }
             ImGui::ColorEdit3("Ambient Light", (float*)&ambientDebug);
             ImGui::SliderFloat("Ambient Intensity", &ambientIntensity, 0.0f, 10.0f);
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
