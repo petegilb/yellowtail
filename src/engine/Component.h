@@ -10,6 +10,10 @@ namespace ytail {
 public:
         Component();
         virtual ~Component() = default;
+
+        virtual void fixedTick(float deltaTime) {}
+
+        virtual void tick(float deltaTime) {}
     };
 } // ytail
 

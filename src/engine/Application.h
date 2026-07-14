@@ -27,7 +27,9 @@ namespace ytail {
         // For each SDL event this frame (input, window, etc.).
         virtual void eventTick(const SDL_Event& event) {}
 
-        // Once per frame, deltaTime in seconds.
+        // Fixed timestep, runs 0..N times per frame with a constant dt
+        virtual void fixedTick(float deltaTime) {}
+
         virtual void tick(float deltaTime) {}
 
     protected:

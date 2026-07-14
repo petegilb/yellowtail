@@ -64,6 +64,11 @@ yellowtail/
 | [GLM](https://github.com/g-truc/glm) | `1.0.1` | Graphics math (vec/mat/quat, projection helpers) | Header-only, GLSL-style API - most online graphics tutorials and Vulkan/SDL_GPU samples use it. Despite the "GL" name, it's just C++ linear algebra with no runtime dependency on OpenGL; we use it with `SDL_GPU`. Build defines `GLM_FORCE_DEPTH_ZERO_TO_ONE` (Vulkan/D3D12/Metal clip-space Z) and `GLM_ENABLE_EXPERIMENTAL` (for `glm/gtx/*` headers tutorials reach for). |
 | [cgltf](https://github.com/jkuhlmann/cgltf) | `v1.9` | glTF 2.0 model parsing | Single-header, MIT, zero deps. glTF is the modern interchange format (Blender / Maya / Substance export it natively). |
 
+## Helpful References/Resources
+- https://gdcvault.com/play/1027891/Architecting-Jolt-Physics-for-Horizon
+- https://github.com/ocornut/imgui/blob/master/examples/example_sdl3_sdlgpu3/main.cpp
+- https://www.gafferongames.com/post/fix_your_timestep/
+
 ## Shaders (SDL_gpu via SDL_shadercross)
 
 Some info on shadercross: https://moonside.games/posts/introducing-sdl-shadercross/

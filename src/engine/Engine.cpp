@@ -4,11 +4,14 @@
 
 #include "Engine.h"
 
+#include <algorithm>
+
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlgpu3.h"
 
 #include "Application.h"
+#include "managers/PhysicsManager.h"
 #include "components/RenderComponent.h"
 #include "components/TransformComponent.h"
 #include "components/CameraComponent.h"
@@ -17,6 +20,8 @@
 
 namespace ytail {
     Engine::Engine() {
+        SDL_SetLogPriorities(logPriority);
+
         SDL_Log("Starting yellowtail...");
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error starting SDL! %s", SDL_GetError());
@@ -81,6 +86,7 @@ namespace ytail {
         }
         BasePath = SDL_GetBasePath();
         resourceManager = std::make_unique<ResourceManager>(device, window, BasePath);
+        physicsManager = std::make_unique<PhysicsManager>();
         initializeImGui();
 
         // The app (game or editor) builds its scene now that the engine + resources are ready.
@@ -132,9 +138,40 @@ namespace ytail {
 
     void Engine::tick(float deltaTime) {
         eventTick();
-        if (app) app->tick(deltaTime);
+
+        // see https://www.gafferongames.com/post/fix_your_timestep/
+
+        // Fixed-step simulation: accumulate real time and drain it in constant-sized steps, so the
+        // sim advances at FIXED_DT no matter the frame rate.
+        if (simulating) {
+            fixedAccumulator += deltaTime;
+            fixedAccumulator = std::min(fixedAccumulator, MAX_ACCUMULATOR);
+            while (fixedAccumulator >= FIXED_DT) {
+                fixedTick(FIXED_DT);
+                fixedAccumulator -= FIXED_DT;
+            }
+        }
+
+        // Variable-step per-frame work (runs as fast as we render): engine, then app, then components.
         updateTick();
-        renderTick();
+        if (app) app->tick(deltaTime);
+        for (const auto& [id, entity] : entities) {
+            if (entity) entity->tick(deltaTime);
+        }
+
+        // Fraction into the next fixed step, so render can interpolate between the last two sim states.
+        const float alpha = fixedAccumulator / FIXED_DT;
+        renderTick(alpha);
+    }
+
+    void Engine::fixedTick(float deltaTime) {
+        // engine (physics), then app, then components.
+        if (physicsManager) physicsManager->step(deltaTime);
+        if (app) app->fixedTick(deltaTime);
+        for (const auto& [id, entity] : entities) {
+            if (entity) entity->fixedTick(deltaTime);
+        }
+        tickNumber++;
     }
 
     void Engine::eventTick() {
@@ -199,7 +236,7 @@ namespace ytail {
         presentMode = mode;
     }
 
-    int Engine::renderTick() {
+    int Engine::renderTick(float alpha) {
         drawCallsLastFrame = 0;
         // just found this reference: https://dawaralvi.github.io/sdl-gpu/
         // get the active camera + aspect ratio
@@ -516,6 +553,19 @@ namespace ytail {
             if (ImGui::Combo("Present Mode", &presentModeIdx, presentModeNames, 3)) {
                 setPresentMode(presentModeValues[presentModeIdx]);
             }
+
+            const char* logLevelNames[] = { "Verbose", "Debug", "Info", "Warn", "Error" };
+            const SDL_LogPriority logLevelValues[] = {
+                SDL_LOG_PRIORITY_VERBOSE, SDL_LOG_PRIORITY_DEBUG, SDL_LOG_PRIORITY_INFO,
+                SDL_LOG_PRIORITY_WARN, SDL_LOG_PRIORITY_ERROR
+            };
+            int logLevelIdx = 2;
+            for (int i = 0; i < 5; ++i) if (logLevelValues[i] == logPriority) logLevelIdx = i;
+            if (ImGui::Combo("Log Verbosity", &logLevelIdx, logLevelNames, 5)) {
+                logPriority = logLevelValues[logLevelIdx];
+                SDL_SetLogPriorities(logPriority);
+            }
+
             ImGui::ColorEdit3("Ambient Light", (float*)&ambientDebug);
             ImGui::SliderFloat("Ambient Intensity", &ambientIntensity, 0.0f, 10.0f);
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);

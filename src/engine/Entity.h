@@ -19,6 +19,14 @@ public:
 
         [[nodiscard]] Uint32 getId() const {return entityId;}
 
+        // Fan the fixed/variable ticks out to every attached component.
+        void fixedTick(float deltaTime) {
+            for (const auto& comp : components) comp->fixedTick(deltaTime);
+        }
+        void tick(float deltaTime) {
+            for (const auto& comp : components) comp->tick(deltaTime);
+        }
+
         // creates a new component and attaches it to this entity
         template<typename T, typename... Args>
         T* addComponent(Args&&... args) {

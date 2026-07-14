@@ -18,6 +18,7 @@
 namespace ytail {
     class ResourceManager;
     class Application;
+    class PhysicsManager;
 
     class Engine {
     public:
@@ -41,9 +42,22 @@ namespace ytail {
 
         void eventTick();
 
+        // One fixed simulation step (physics, deterministic gameplay). Driven by the accumulator
+        // in tick(), so it runs 0..N times per frame with a constant dt.
+        void fixedTick(float deltaTime);
+
         void updateTick();
 
-        int renderTick();
+        // alpha is the fraction (0..1) into the next fixed step, for interpolating rendered state.
+        int renderTick(float alpha);
+
+        // Play/pause the fixed simulation. The game leaves this on; the editor toggles it so it
+        // can hold a static scene in edit mode and simulate on demand.
+        void setSimulating(bool value) { simulating = value; }
+        [[nodiscard]] bool isSimulating() const { return simulating; }
+
+        // count of fixed steps run. The backbone for networking (tag state/inputs by tick).
+        [[nodiscard]] Uint64 getTickNumber() const { return tickNumber; }
 
         // Create (or resize) the depth+stencil texture to match the given pixel size.
         void ensureDepthTexture(int width, int height);
@@ -63,6 +77,7 @@ namespace ytail {
         SDL_GPUDevice* device = nullptr;
         const char* BasePath = nullptr;
         bool bUsingSRGB = false;
+        SDL_LogPriority logPriority = SDL_LOG_PRIORITY_INFO;
 
         // Depth+stencil target, recreated when the window size changes (see ensureDepthTexture).
         SDL_GPUTexture* depthTexture = nullptr;
@@ -72,6 +87,19 @@ namespace ytail {
         // Recorded so a present-mode change re-applies the same composition
         SDL_GPUSwapchainComposition swapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR;
         SDL_GPUPresentMode presentMode = SDL_GPU_PRESENTMODE_VSYNC;
+
+        // Fixed simulation timestep: 60 steps/sec. Physics + deterministic gameplay run at this rate
+        // regardless of render frame rate.
+        static constexpr float FIXED_DT = 1.0f / 60.0f;
+        // Cap on accumulated time so a hitch can't trigger a runaway catch-up.
+        // Past this, the sim briefly runs in slow motion instead of trying to replay every missed step.
+        static constexpr float MAX_ACCUMULATOR = 0.25f;
+
+        // Fixed-step simulation state. Leftover time carried between frames, the running fixed-step
+        // count, and whether the sim is advancing (see setSimulating).
+        float fixedAccumulator = 0.0f;
+        Uint64 tickNumber = 0;
+        bool simulating = true;
 
         // locks the framerate if greater than 0
         int framerateLock = 0;
@@ -89,6 +117,9 @@ namespace ytail {
         // ResourceManager that handles the lifetimes of objects loaded into memory
         std::unique_ptr<ytail::ResourceManager> resourceManager;
 
+        // Jolt physics world. Stepped from the tick (a fixed-step loop comes later).
+        std::unique_ptr<ytail::PhysicsManager> physicsManager;
+
         // The game or editor driving this engine. Non-owning, lives in main()
         Application* app = nullptr;
 
@@ -101,6 +132,7 @@ namespace ytail {
         ImVec4 ambientDebug = ImVec4(1.f, 1.f, 1.f, 1.00f);
         float ambientIntensity = 0.2f;
         bool showDebugWindow = false;
+
 };
 
 } // ytail
