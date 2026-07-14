@@ -8,6 +8,7 @@
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlgpu3.h"
 
+#include "Application.h"
 #include "components/RenderComponent.h"
 #include "components/TransformComponent.h"
 #include "components/CameraComponent.h"
@@ -82,68 +83,8 @@ namespace ytail {
         resourceManager = std::make_unique<ResourceManager>(device, window, BasePath);
         initializeImGui();
 
-        // scene setup
-        Entity* camera = addEntity();
-        const auto camTransform = camera->addComponent<TransformComponent>();
-        camera->addComponent<CameraComponent>();
-        setActiveCamera(camera->getId());
-        camTransform->position = glm::vec3(0.0f, 3.0f, 5.0f);   // back up 5 units, looking down -Z toward origin
-        camTransform->setRotationEuler(glm::vec3(-30.0f, 0.0f, 0.0f));
-
-        Entity* light0 = addEntity();
-        const auto lightTransform = light0->addComponent<TransformComponent>();
-        const auto lightComponent = light0->addComponent<LightComponent>();
-        lightComponent->color = glm::vec3(1.0f, 1.0f, 1.0f);
-        lightComponent->intensity = 1.0f;
-        lightTransform->position = glm::vec3(1.2f, 1.0f, 2.0f);  // camera side, up and to the right
-
-        // create material
-        auto material = std::make_shared<Material>();
-        material->pipelineType = PipelineType::LitStatic;
-        // diffuse (color -> sRGB) at t0, specular (data mask -> linear) at t1, in slot order.
-        SDL_GPUSampler* sampler = resourceManager->getSampler(SamplerType::LinearWrap);
-        material->textures.push_back({ resourceManager->getTexture("textures/container2.png", true), sampler });
-        material->textures.push_back({ resourceManager->getTexture("textures/container2_specular.png", false), sampler });
-        // material uniform (b1 space3): just shininess for now.
-        // https://learnopengl.com/Advanced-Lighting/Advanced-Lighting
-        // hardcoded exponent value to 64
-        MaterialUniform matUniform{};
-        matUniform.shininess = 64.0f;
-        material->setUniform(matUniform);
-
-        Entity* cube = addEntity();
-        cube->addComponent<TransformComponent>();
-        auto cubeRender = cube->addComponent<RenderComponent>();
-        // add mesh and materials to render component
-        std::shared_ptr<Mesh> cubeMesh = resourceManager->getMesh("models/cube.glb");
-        cubeRender->setMesh(cubeMesh);
-        cubeRender->addMaterial(material);
-
-        Entity* cube2 = addEntity();
-        auto cube2Transform = cube2->addComponent<TransformComponent>();
-        auto cube2Render = cube2->addComponent<RenderComponent>();
-        cube2Render->setMesh(cubeMesh);
-        cube2Render->addMaterial(material);
-        cube2Render->outline = true;
-        cube2Transform->position = glm::vec3(2.0f, -1.0f, -5.0f);;
-
-        // create floor
-        auto floorMaterial = std::make_shared<Material>();
-        floorMaterial->pipelineType = PipelineType::LitStatic;
-        floorMaterial->textures.push_back({ resourceManager->getTexture("textures/wood.png", true), sampler });
-        floorMaterial->textures.push_back({ resourceManager->getSolidTexture(255), sampler });
-        MaterialUniform floorMatUniform{};
-        floorMatUniform.shininess = 64.0f;
-        floorMatUniform.uvScale = glm::vec2(4.00f);
-        floorMaterial->setUniform(floorMatUniform);
-
-        Entity* floor = addEntity();
-        auto floorTransform = floor->addComponent<TransformComponent>();
-        floorTransform->position = glm::vec3(0.0f, -2.0f, 0.0f);
-        auto floorRender = floor->addComponent<RenderComponent>();
-        std::shared_ptr<Mesh> floorMesh = resourceManager->getMesh("models/floor.glb");
-        floorRender->setMesh(floorMesh);
-        floorRender->addMaterial(floorMaterial);
+        // The app (game or editor) builds its scene now that the engine + resources are ready.
+        if (app) app->start();
 
         mainLoop();
         return 0;
@@ -190,15 +131,17 @@ namespace ytail {
     }
 
     void Engine::tick(float deltaTime) {
-        inputTick();
+        eventTick();
+        if (app) app->tick(deltaTime);
         updateTick();
         renderTick();
     }
 
-    void Engine::inputTick() {
+    void Engine::eventTick() {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
+            if (app) app->eventTick(event);
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)) {
                 bRunning = false;
                 return;
@@ -470,9 +413,6 @@ namespace ytail {
     }
 
     void Engine::handleInput(const SDL_KeyboardEvent &keyboard_event) {
-        if (keyboard_event.key == SDLK_ESCAPE) {
-            quit();
-        }
         if (keyboard_event.key == SDLK_TAB) {
             showDebugWindow = !showDebugWindow;
         }

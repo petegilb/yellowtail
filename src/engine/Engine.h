@@ -17,11 +17,18 @@
 
 namespace ytail {
     class ResourceManager;
+    class Application;
 
     class Engine {
     public:
         Engine();
         ~Engine();
+
+        // The application (game or editor) the engine drives. Non-owning; set before run().
+        void setApplication(Application* inApp) { app = inApp; }
+
+        // Apps build their scene against the resource manager (meshes, textures, samplers).
+        [[nodiscard]] ResourceManager* getResourceManager() const { return resourceManager.get(); }
 
         int run();
 
@@ -32,7 +39,7 @@ namespace ytail {
         // Advance a frame (one iteration in the main loop)
         void tick(float deltaTime);
 
-        void inputTick();
+        void eventTick();
 
         void updateTick();
 
@@ -81,6 +88,9 @@ namespace ytail {
 
         // ResourceManager that handles the lifetimes of objects loaded into memory
         std::unique_ptr<ytail::ResourceManager> resourceManager;
+
+        // The game or editor driving this engine. Non-owning, lives in main()
+        Application* app = nullptr;
 
         // dear imgui
         void initializeImGui();
