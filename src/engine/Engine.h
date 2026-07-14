@@ -19,6 +19,7 @@ namespace ytail {
     class ResourceManager;
     class Application;
     class PhysicsManager;
+    class DebugLineRenderer;
 
     class Engine {
     public:
@@ -77,7 +78,7 @@ namespace ytail {
         SDL_GPUDevice* device = nullptr;
         const char* BasePath = nullptr;
         bool bUsingSRGB = false;
-        SDL_LogPriority logPriority = SDL_LOG_PRIORITY_INFO;
+        SDL_LogPriority logPriority = SDL_LOG_PRIORITY_VERBOSE;
 
         // Depth+stencil target, recreated when the window size changes (see ensureDepthTexture).
         SDL_GPUTexture* depthTexture = nullptr;
@@ -120,6 +121,9 @@ namespace ytail {
         // Jolt physics world. Stepped from the tick (a fixed-step loop comes later).
         std::unique_ptr<ytail::PhysicsManager> physicsManager;
 
+        // Draws the physics debug wireframe. Off unless showPhysicsShapes is enabled.
+        std::unique_ptr<ytail::DebugLineRenderer> debugLineRenderer;
+
         // The game or editor driving this engine. Non-owning, lives in main()
         Application* app = nullptr;
 
@@ -132,6 +136,7 @@ namespace ytail {
         ImVec4 ambientDebug = ImVec4(1.f, 1.f, 1.f, 1.00f);
         float ambientIntensity = 0.2f;
         bool showDebugWindow = false;
+        bool showPhysicsShapes = false;
 
 };
 

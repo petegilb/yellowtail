@@ -20,6 +20,7 @@ namespace ytail {
         LitSkeletal,
         UnlitStatic,
         Outline,
+        DebugLine,
         Count
     };
 

@@ -18,6 +18,9 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyManager.h>
+
+#include "../render/JoltDebugRenderer.h"
 
 #include <SDL3/SDL.h>
 
@@ -138,7 +141,9 @@ namespace ytail {
 
         PhysicsSystem physicsSystem;
 
-        // --- temporary self-test: a falling sphere over a static floor (delete once we have a RigidbodyComponent) ---
+        JoltDebugRenderer debugRenderer;
+
+        // TODO --- temporary self-test: a falling sphere over a static floor (delete once we have a RigidbodyComponent) ---
         BodyID sphereId;
         float lastLoggedY = 1e9f;
     };
@@ -161,7 +166,7 @@ namespace ytail {
             impl->objectVsBroadPhaseLayerFilter,
             impl->objectVsObjectLayerFilter);
 
-        // --- temporary self-test scene ---
+        // TODO --- temporary self-test scene ---
         BodyInterface& bodyInterface = impl->physicsSystem.GetBodyInterface();
 
         BoxShapeSettings floorShapeSettings(Vec3(100.0f, 1.0f, 100.0f));
@@ -205,5 +210,18 @@ namespace ytail {
             SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION, "[Jolt] sphere Y = %.2f", y);
             impl->lastLoggedY = y;
         }
+    }
+
+    void PhysicsManager::debugDraw() {
+        impl->debugRenderer.clear();
+
+        BodyManager::DrawSettings settings;
+        settings.mDrawShape = true;
+        settings.mDrawShapeWireframe = true;  // routes shapes through DrawLine into the debug renderer's line buffer
+        impl->physicsSystem.DrawBodies(settings, &impl->debugRenderer);
+    }
+
+    const std::vector<JoltDebugVertex>& PhysicsManager::getDebugLines() const {
+        return impl->debugRenderer.getLines();
     }
 } // ytail

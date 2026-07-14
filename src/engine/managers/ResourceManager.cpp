@@ -7,6 +7,8 @@
 #include <SDL3_shadercross/SDL_shadercross.h>
 #include <cgltf.h>
 
+#include "../render/JoltDebugVertex.h"
+
 namespace ytail {
     ResourceManager::ResourceManager(SDL_GPUDevice* inDevice, SDL_Window* inWindow, const char* inBasePath) {
         device = inDevice;
@@ -716,6 +718,76 @@ namespace ytail {
             pipelines[static_cast<size_t>(PipelineType::Outline)] = pipeline;
 
             // unload shaders
+            SDL_ReleaseGPUShader(device, vertexShader);
+            SDL_ReleaseGPUShader(device, fragmentShader);
+        }
+
+
+        // Physics debug wireframe. Vertices are world-space (Jolt bakes in the body transform), so
+        // the vertex shader only needs view*proj. Drawn as a line list, depth-tested against the
+        // scene but not writing depth, no culling.
+        // vertex   : 1 uniform buffer (Camera cbuffer @ b0 space1)
+        // fragment : SolidColor.frag just passes the vertex color at TEXCOORD0 through
+        { // DebugLine
+            SDL_GPUShader* vertexShader   = loadShader(device, "DebugLine.vert", 0,
+                1, 0, 0);
+            SDL_GPUShader* fragmentShader = loadShader(device, "SolidColor.frag", 0,
+                0, 0, 0);
+            if (vertexShader == nullptr || fragmentShader == nullptr) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load DebugLine shaders");
+                return;
+            }
+
+            // Vertex layout - must match JoltDebugVertex (vec3 position, vec4 color).
+            SDL_GPUVertexBufferDescription vbDesc = {};
+            vbDesc.slot = 0;
+            vbDesc.pitch = sizeof(JoltDebugVertex);
+            vbDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+            vbDesc.instance_step_rate = 0;
+
+            SDL_GPUVertexAttribute attributes[2] = {};
+            attributes[0].location = 0;  // position -> TEXCOORD0
+            attributes[0].buffer_slot = 0;
+            attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
+            attributes[0].offset = offsetof(JoltDebugVertex, position);
+            attributes[1].location = 1;  // color -> TEXCOORD1
+            attributes[1].buffer_slot = 0;
+            attributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
+            attributes[1].offset = offsetof(JoltDebugVertex, color);
+
+            SDL_GPUVertexInputState vertexInput = {};
+            vertexInput.vertex_buffer_descriptions = &vbDesc;
+            vertexInput.num_vertex_buffers = 1;
+            vertexInput.vertex_attributes = attributes;
+            vertexInput.num_vertex_attributes = 2;
+
+            SDL_GPUColorTargetDescription colorTarget = {};
+            colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device, window);
+
+            SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {};
+            pipelineCreateInfo.vertex_shader = vertexShader;
+            pipelineCreateInfo.fragment_shader = fragmentShader;
+            pipelineCreateInfo.vertex_input_state = vertexInput;
+            pipelineCreateInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
+            pipelineCreateInfo.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+            pipelineCreateInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+
+            // Depth-test against the scene so hidden edges are occluded, but don't write depth.
+            pipelineCreateInfo.depth_stencil_state.enable_depth_test = true;
+            pipelineCreateInfo.depth_stencil_state.enable_depth_write = false;
+            pipelineCreateInfo.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+
+            pipelineCreateInfo.target_info.color_target_descriptions = &colorTarget;
+            pipelineCreateInfo.target_info.num_color_targets = 1;
+            pipelineCreateInfo.target_info.has_depth_stencil_target = true;
+            pipelineCreateInfo.target_info.depth_stencil_format = depthStencilFormat;
+
+            SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipelineCreateInfo);
+            if (pipeline == nullptr) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create DebugLine pipeline: %s", SDL_GetError());
+            }
+            pipelines[static_cast<size_t>(PipelineType::DebugLine)] = pipeline;
+
             SDL_ReleaseGPUShader(device, vertexShader);
             SDL_ReleaseGPUShader(device, fragmentShader);
         }

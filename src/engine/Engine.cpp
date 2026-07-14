@@ -12,6 +12,7 @@
 
 #include "Application.h"
 #include "managers/PhysicsManager.h"
+#include "render/DebugLineRenderer.h"
 #include "components/RenderComponent.h"
 #include "components/TransformComponent.h"
 #include "components/CameraComponent.h"
@@ -23,6 +24,7 @@ namespace ytail {
         SDL_SetLogPriorities(logPriority);
 
         SDL_Log("Starting yellowtail...");
+        SDL_Log("Current log verbosity is %d", logPriority);
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error starting SDL! %s", SDL_GetError());
         }
@@ -38,6 +40,7 @@ namespace ytail {
 
         // Release everything that owns GPU resources BEFORE destroying the device.
         entities.clear(); // RenderComponents drop their shared_ptr<Mesh>/Material
+        debugLineRenderer.reset(); // frees the debug line vertex/transfer buffers
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
         if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
 
@@ -87,6 +90,7 @@ namespace ytail {
         BasePath = SDL_GetBasePath();
         resourceManager = std::make_unique<ResourceManager>(device, window, BasePath);
         physicsManager = std::make_unique<PhysicsManager>();
+        debugLineRenderer = std::make_unique<DebugLineRenderer>(device);
         initializeImGui();
 
         // The app (game or editor) builds its scene now that the engine + resources are ready.
@@ -238,6 +242,7 @@ namespace ytail {
 
     int Engine::renderTick(float alpha) {
         drawCallsLastFrame = 0;
+
         // just found this reference: https://dawaralvi.github.io/sdl-gpu/
         // get the active camera + aspect ratio
         if (activeCamera == nullptr) {
@@ -285,6 +290,13 @@ namespace ytail {
 
         // ImGui uploads its vertex/index data here -- needs to be before BeginRenderPass
         renderImGui(commandBuffer);
+
+        // Physics debug wireframe: regenerate the geometry and stage it. The upload runs a copy
+        // pass, so like ImGui it has to happen before BeginRenderPass.
+        if (showPhysicsShapes && physicsManager && debugLineRenderer) {
+            physicsManager->debugDraw();
+            debugLineRenderer->upload(commandBuffer, physicsManager->getDebugLines());
+        }
 
         // Depth+stencil attachment for the geometry pass. Depth clears to the far plane (1.0);
         // stencil clears to 0. Neither is needed after the frame, so we don't store them.
@@ -435,6 +447,12 @@ namespace ytail {
             }
         }
 
+        // Physics debug wireframe on top of the scene (world-space verts, depth-tested, no write).
+        if (showPhysicsShapes && debugLineRenderer) {
+            debugLineRenderer->draw(renderPass, commandBuffer,
+                resourceManager->getPipeline(PipelineType::DebugLine), projection * view);
+        }
+
         SDL_EndGPURenderPass(renderPass);
 
         // UI pass: composite ImGui on top of the finished scene. Color-only (no depth target)
@@ -565,6 +583,8 @@ namespace ytail {
                 logPriority = logLevelValues[logLevelIdx];
                 SDL_SetLogPriorities(logPriority);
             }
+
+            ImGui::Checkbox("Show Physics Shapes", &showPhysicsShapes);
 
             ImGui::ColorEdit3("Ambient Light", (float*)&ambientDebug);
             ImGui::SliderFloat("Ambient Intensity", &ambientIntensity, 0.0f, 10.0f);
