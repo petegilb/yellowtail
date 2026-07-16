@@ -22,6 +22,9 @@ public:
         [[nodiscard]] glm::mat4 projectionMatrix(float aspect) const {
             return glm::perspective(glm::radians(fovYDegrees), aspect, nearPlane, farPlane);
         }
+
+        [[nodiscard]] const char* getTypeName() const override { return "Camera"; }
+        void drawInspector() override;
     };
 } // ytail
 

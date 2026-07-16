@@ -5,6 +5,7 @@
 #ifndef YELLOWTAIL_ENTITY_H
 #define YELLOWTAIL_ENTITY_H
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -18,6 +19,12 @@ public:
         Entity(Uint32 newId);
 
         [[nodiscard]] Uint32 getId() const {return entityId;}
+
+        [[nodiscard]] const std::string& getName() const { return name; }
+        void setName(const std::string& newName) { name = newName; }
+
+        // Components in attach order, for the editor to iterate and inspect
+        [[nodiscard]] const std::vector<std::unique_ptr<Component>>& getComponents() const { return components; }
 
         // Fan the fixed/variable ticks out to every attached component.
         void fixedTick(float deltaTime) {
@@ -60,6 +67,7 @@ public:
 
 private:
         Uint32 entityId;
+        std::string name;
         std::vector<std::unique_ptr<Component>> components;
     };
 } // ytail

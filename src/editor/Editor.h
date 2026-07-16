@@ -21,9 +21,13 @@ namespace ytail
         void start() override;
         void eventTick(const SDL_Event& event) override;
         void tick(float deltaTime) override;
+        void onImGui() override;
 
     protected:
         void handleInput(const SDL_KeyboardEvent& keyboard_event);
+
+        // id of the entity shown in the inspector; 0 = none (ids start at 1)
+        Uint32 selectedEntity = 0;
     };
 } // ytail
 

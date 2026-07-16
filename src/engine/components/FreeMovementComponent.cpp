@@ -100,4 +100,13 @@ namespace ytail
             default: ;
         }
     }
+
+    void FreeMovementComponent::drawInspector() {
+        ImGui::DragFloat("Move Speed", &moveSpeed, 0.1f, minSpeed, maxSpeed);
+        ImGui::DragFloat("Min Speed", &minSpeed, 0.1f, 0.0f, maxSpeed);
+        ImGui::DragFloat("Max Speed", &maxSpeed, 0.1f, minSpeed, 1000.0f);
+        ImGui::DragFloat("Scroll Power", &scrollPower, 0.05f);
+        ImGui::DragFloat("Look Sensitivity", &lookSensitivity, 0.01f, 0.0f, 5.0f);
+        ImGui::Checkbox("Require Right Click", &requireRightClick);
+    }
 } // ytail

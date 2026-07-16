@@ -510,6 +510,7 @@ namespace ytail {
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable docking for editor panels
 
         // Setup Dear ImGui style
         ImGui::StyleColorsDark();
@@ -603,6 +604,9 @@ namespace ytail {
             ImGui::Text("Draw Calls Last Frame %d", drawCallsLastFrame);
             ImGui::End();
         }
+
+        // The app (editor) contributes its own windows inside the same ImGui frame.
+        if (app) app->onImGui();
     }
 
     void Engine::renderImGui(SDL_GPUCommandBuffer* commandBuffer){

@@ -45,6 +45,9 @@ public:
         [[nodiscard]] glm::mat4 normalMatrix() const {
             return glm::transpose(glm::inverse(modelMatrix()));
         }
+
+        [[nodiscard]] const char* getTypeName() const override { return "Transform"; }
+        void drawInspector() override;
     };
 } // ytail
 

@@ -70,6 +70,9 @@ namespace ytail {
         Entity* addEntity();
         Entity* getEntity(Uint32 id);
 
+        // All entities, for the editor outliner. Lookups by id still go through getEntity().
+        [[nodiscard]] const std::unordered_map<Uint32, std::unique_ptr<Entity>>& getEntities() const { return entities; }
+
         void setActiveCamera(Uint32 id);
     protected:
         SDL_Window* window = nullptr;

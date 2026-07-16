@@ -4,5 +4,19 @@
 
 #include "TransformComponent.h"
 
+#include "imgui.h"
+
 namespace ytail {
+    void TransformComponent::drawInspector() {
+        ImGui::DragFloat3("Position", &position.x, 0.1f);
+
+        // Rotation shown as euler degrees. Re-decomposing the quat each frame can drift while
+        // dragging; a euler cache or gizmo is the eventual fix.
+        glm::vec3 euler = getRotationEuler();
+        if (ImGui::DragFloat3("Rotation", &euler.x, 0.5f)) {
+            setRotationEuler(euler);
+        }
+
+        ImGui::DragFloat3("Scale", &scale.x, 0.1f);
+    }
 } // ytail

@@ -4,6 +4,8 @@
 
 #include "RigidbodyComponent.h"
 
+#include "imgui.h"
+
 #include "TransformComponent.h"
 #include "engine/Entity.h"
 
@@ -41,5 +43,19 @@ namespace ytail {
         if (type == BodyType::Dynamic) {
             PhysicsManager::get().getBodyTransform(body, transformComp->position, transformComp->rotation);
         }
+    }
+
+    void RigidbodyComponent::drawInspector() {
+        const char* typeNames[] = { "Static", "Dynamic" };
+        const char* shapeNames[] = { "Box", "Sphere" };
+        ImGui::Text("Type: %s", typeNames[static_cast<int>(type)]);
+        ImGui::Text("Shape: %s", shapeNames[static_cast<int>(shape)]);
+
+        if (shape == ColliderShape::Box) {
+            ImGui::DragFloat3("Half Extents", &halfExtents.x, 0.1f);
+        } else {
+            ImGui::DragFloat("Radius", &radius, 0.1f);
+        }
+        ImGui::TextDisabled("(edits apply on next body creation)");
     }
 } // ytail

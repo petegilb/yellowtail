@@ -13,6 +13,9 @@ namespace ytail {
 public:
         glm::vec3 color{1.f};    // linear RGB
         float intensity{1.f};
+
+        [[nodiscard]] const char* getTypeName() const override { return "Light"; }
+        void drawInspector() override;
     };
 } // ytail
 

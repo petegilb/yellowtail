@@ -4,7 +4,15 @@
 
 #include "Editor.h"
 
+#include <algorithm>
+#include <vector>
+
+#include "imgui.h"
+#include "imgui_internal.h"
+
 #include "engine/Engine.h"
+#include "engine/Entity.h"
+#include "engine/Component.h"
 #include "engine/components/RenderComponent.h"
 #include "engine/components/TransformComponent.h"
 #include "engine/components/CameraComponent.h"
@@ -25,6 +33,10 @@ namespace ytail
 
     void Editor::start(){
         SDL_Log("Editor started!");
+
+        // Editor opens in edit mode; the user presses Play to simulate.
+        engine->setSimulating(false);
+        // TODO make the scene reset when turning off simulating (it should load from our scene file once that exists)
 
         ResourceManager* resourceManager = engine->getResourceManager();
 
@@ -129,6 +141,75 @@ namespace ytail
     }
 
     void Editor::tick(float deltaTime){
+    }
+
+    void Editor::onImGui(){
+        // Full-window dockspace with a passthrough center, so the 3D scene shows through the
+        // middle and panels dock around it. Build a default layout the first time only
+        const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
+        if (ImGui::DockBuilderGetNode(dockspaceId) == nullptr) {
+            ImGui::DockBuilderAddNode(dockspaceId,
+                ImGuiDockNodeFlags_DockSpace | ImGuiDockNodeFlags_PassthruCentralNode);
+            ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+
+            ImGuiID center = dockspaceId;
+            const ImGuiID topId   = ImGui::DockBuilderSplitNode(center, ImGuiDir_Up,    0.06f, nullptr, &center);
+            const ImGuiID leftId  = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left,  0.18f, nullptr, &center);
+            const ImGuiID rightId = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.22f, nullptr, &center);
+
+            ImGui::DockBuilderDockWindow("Toolbar", topId);
+            ImGui::DockBuilderDockWindow("Outliner", leftId);
+            ImGui::DockBuilderDockWindow("Inspector", rightId);
+            ImGui::DockBuilderFinish(dockspaceId);
+        }
+        ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
+            ImGuiDockNodeFlags_PassthruCentralNode);
+
+        // Toolbar: play/pause the fixed-step simulation
+        ImGui::Begin("Toolbar");
+        const bool simulating = engine->isSimulating();
+        if (ImGui::Button(simulating ? "Pause" : "Play")) {
+            engine->setSimulating(!simulating);
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted(simulating ? "Simulating" : "Paused");
+        ImGui::End();
+
+        // Outliner: every entity, sorted by id for a stable order, click to select
+        ImGui::Begin("Outliner");
+        std::vector<Uint32> ids;
+        ids.reserve(engine->getEntities().size());
+        for (const auto& [id, entity] : engine->getEntities()) ids.push_back(id);
+        std::sort(ids.begin(), ids.end());
+        for (const Uint32 id : ids) {
+            Entity* entity = engine->getEntity(id);
+            if (!entity) continue;
+            if (ImGui::Selectable(entity->getName().c_str(), id == selectedEntity)) {
+                selectedEntity = id;
+            }
+        }
+        ImGui::End();
+
+        // Inspector: name + each component's own widgets
+        ImGui::Begin("Inspector");
+        if (Entity* entity = engine->getEntity(selectedEntity)) {
+            char nameBuffer[128];
+            SDL_strlcpy(nameBuffer, entity->getName().c_str(), sizeof(nameBuffer));
+            if (ImGui::InputText("Name", nameBuffer, sizeof(nameBuffer))) {
+                entity->setName(nameBuffer);
+            }
+            ImGui::Separator();
+            for (const auto& component : entity->getComponents()) {
+                ImGui::PushID(component.get());
+                if (ImGui::CollapsingHeader(component->getTypeName(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                    component->drawInspector();
+                }
+                ImGui::PopID();
+            }
+        } else {
+            ImGui::TextDisabled("No entity selected");
+        }
+        ImGui::End();
     }
 
     void Editor::handleInput(const SDL_KeyboardEvent& keyboard_event){

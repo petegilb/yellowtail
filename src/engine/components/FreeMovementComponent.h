@@ -29,6 +29,9 @@ namespace ytail
         // true = hold right click for movement
         bool requireRightClick = true;
 
+        [[nodiscard]] const char* getTypeName() const override { return "Free Movement"; }
+        void drawInspector() override;
+
     private:
         // make sure we can get the transform from the transform component
         bool ensureTransform();

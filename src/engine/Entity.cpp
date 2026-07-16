@@ -7,5 +7,6 @@
 namespace ytail {
     Entity::Entity(const Uint32 newId) {
         entityId = newId;
+        name = "Entity " + std::to_string(newId);
     }
 } // ytail

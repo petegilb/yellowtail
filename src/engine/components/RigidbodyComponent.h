@@ -23,6 +23,9 @@ namespace ytail {
         float radius = 0.5f;          // sphere
         physics::BodyType type = physics::BodyType::Dynamic;
 
+        [[nodiscard]] const char* getTypeName() const override { return "Rigidbody"; }
+        void drawInspector() override;
+
     private:
         // create the body from the sibling transform on the first fixed tick
         bool ensureBody();

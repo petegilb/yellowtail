@@ -18,6 +18,10 @@ public:
         virtual void tick(float deltaTime) {}
 
         virtual void eventTick(const SDL_Event& event){}
+
+        // Editor inspector: label for the collapsing header, and the ImGui widgets
+        [[nodiscard]] virtual const char* getTypeName() const { return "Component"; }
+        virtual void drawInspector() {}
     protected:
         friend class Entity;
         Entity* owner = nullptr;

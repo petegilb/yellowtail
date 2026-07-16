@@ -45,6 +45,9 @@ public:
         void setMesh(std::shared_ptr<Mesh> inMesh);
         // TODO this just adds materials but what about if we don't have any yet? or resetting?
         void addMaterial(std::shared_ptr<Material> inMaterial);
+
+        [[nodiscard]] const char* getTypeName() const override { return "Render"; }
+        void drawInspector() override;
     };
 } // ytail
 
