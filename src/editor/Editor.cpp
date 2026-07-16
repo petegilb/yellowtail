@@ -10,6 +10,7 @@
 #include "engine/components/CameraComponent.h"
 #include "engine/components/FreeMovementComponent.h"
 #include "engine/components/LightComponent.h"
+#include "engine/components/RigidbodyComponent.h"
 #include "engine/managers/ResourceManager.h"
 
 namespace ytail
@@ -58,7 +59,8 @@ namespace ytail
         material->setUniform(matUniform);
 
         Entity* cube = engine->addEntity();
-        cube->addComponent<TransformComponent>();
+        auto cubeTransform = cube->addComponent<TransformComponent>();
+        cubeTransform->scale = glm::vec3(0.5);
         auto cubeRender = cube->addComponent<RenderComponent>();
         // add mesh and materials to render component
         std::shared_ptr<Mesh> cubeMesh = resourceManager->getMesh("models/cube.glb");
@@ -90,6 +92,34 @@ namespace ytail
         std::shared_ptr<Mesh> floorMesh = resourceManager->getMesh("models/floor.glb");
         floorRender->setMesh(floorMesh);
         floorRender->addMaterial(floorMaterial);
+
+        // physics: static floor collider, sitting so its top lines up with the visual floor (y = -2)
+        Entity* floorBody = engine->addEntity();
+        auto floorBodyTransform = floorBody->addComponent<TransformComponent>();
+        floorBodyTransform->position = glm::vec3(0.0f, -3.0f, 0.0f);
+        auto floorCollider = floorBody->addComponent<RigidbodyComponent>();
+        floorCollider->type = physics::BodyType::Static;
+        floorCollider->shape = physics::ColliderShape::Box;
+        floorCollider->halfExtents = glm::vec3(50.0f, 1.0f, 50.0f);
+
+        // physics: a sphere that falls onto the floor
+        Entity* sphere = engine->addEntity();
+        auto sphereTransform = sphere->addComponent<TransformComponent>();
+        sphereTransform->position = glm::vec3(0.0f, 5.0f, 0.0f);
+        auto sphereBody = sphere->addComponent<RigidbodyComponent>();
+        sphereBody->type = physics::BodyType::Dynamic;
+        sphereBody->shape = physics::ColliderShape::Sphere;
+        sphereBody->radius = 1.0f;
+        
+        // sphere material
+        auto sphereMaterial = std::make_shared<Material>();
+        sphereMaterial->pipelineType = PipelineType::LitStatic;
+        sphereMaterial->textures.push_back({ resourceManager->getSolidTexture(187, 108, 224), sampler });
+        sphereMaterial->textures.push_back({ resourceManager->getSolidTexture(255), sampler });
+        auto sphereRender = sphere->addComponent<RenderComponent>();
+        std::shared_ptr<Mesh> sphereMesh = resourceManager->getMesh("models/sphere.glb");
+        sphereRender->setMesh(sphereMesh);
+        sphereRender->addMaterial(sphereMaterial);
     }
 
     void Editor::eventTick(const SDL_Event& event){

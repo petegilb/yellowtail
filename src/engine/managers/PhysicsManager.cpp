@@ -125,9 +125,15 @@ namespace {
     constexpr uint cNumBodyMutexes        = 0;     // 0 = let Jolt pick a default
     constexpr uint cMaxBodyPairs          = 1024;
     constexpr uint cMaxContactConstraints = 1024;
+
+    // glm <-> Jolt conversions for the body API.
+    Vec3 toJolt(const glm::vec3& v)  { return Vec3(v.x, v.y, v.z); }
+    Quat toJolt(const glm::quat& q)  { return Quat(q.x, q.y, q.z, q.w); }
+    glm::vec3 toGlm(RVec3Arg v)      { return { v.GetX(), v.GetY(), v.GetZ() }; }
+    glm::quat toGlm(QuatArg q)       { return glm::quat(q.GetW(), q.GetX(), q.GetY(), q.GetZ()); }
 }
 
-namespace ytail {
+namespace ytail::physics {
     struct PhysicsManager::Impl {
         TempAllocatorImpl tempAllocator{ 10 * 1024 * 1024 };  // 10 MiB scratch for the solver
         JobSystemThreadPool jobSystem{
@@ -142,11 +148,12 @@ namespace ytail {
         PhysicsSystem physicsSystem;
 
         JoltDebugRenderer debugRenderer;
-
-        // TODO --- temporary self-test: a falling sphere over a static floor (delete once we have a RigidbodyComponent) ---
-        BodyID sphereId;
-        float lastLoggedY = 1e9f;
     };
+
+    PhysicsManager& PhysicsManager::get() {
+        static PhysicsManager instance;
+        return instance;
+    }
 
     PhysicsManager::PhysicsManager() {
         // Process-global Jolt setup. Must happen before any allocations/bodies, and only once
@@ -165,23 +172,6 @@ namespace ytail {
             impl->broadPhaseLayerInterface,
             impl->objectVsBroadPhaseLayerFilter,
             impl->objectVsObjectLayerFilter);
-
-        // TODO --- temporary self-test scene ---
-        BodyInterface& bodyInterface = impl->physicsSystem.GetBodyInterface();
-
-        BoxShapeSettings floorShapeSettings(Vec3(100.0f, 1.0f, 100.0f));
-        floorShapeSettings.SetEmbedded();  // lives on the stack; don't let Jolt free it
-        ShapeRefC floorShape = floorShapeSettings.Create().Get();
-        BodyCreationSettings floorSettings(floorShape, RVec3(0.0f, -1.0f, 0.0f),
-            Quat::sIdentity(), EMotionType::Static, Layers::NON_MOVING);
-        bodyInterface.CreateAndAddBody(floorSettings, EActivation::DontActivate);
-
-        BodyCreationSettings sphereSettings(new SphereShape(0.5f), RVec3(0.0f, 5.0f, 0.0f),
-            Quat::sIdentity(), EMotionType::Dynamic, Layers::MOVING);
-        impl->sphereId = bodyInterface.CreateAndAddBody(sphereSettings, EActivation::Activate);
-
-        // Rebuild the broadphase after bulk-adding bodies (recommended once at startup).
-        impl->physicsSystem.OptimizeBroadPhase();
 
         SDL_Log("[Jolt] PhysicsManager initialized (%d worker threads)", impl->jobSystem.GetMaxConcurrency() - 1);
     }
@@ -202,14 +192,45 @@ namespace ytail {
         if (err != EPhysicsUpdateError::None) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "[Jolt] physics update error: %d", static_cast<int>(err));
         }
+    }
 
-        // --- temporary self-test: log the sphere's height as it falls and settles ---
-        const RVec3 pos = impl->physicsSystem.GetBodyInterface().GetCenterOfMassPosition(impl->sphereId);
-        const float y = static_cast<float>(pos.GetY());
-        if (SDL_fabsf(y - impl->lastLoggedY) > 0.01f) {
-            SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION, "[Jolt] sphere Y = %.2f", y);
-            impl->lastLoggedY = y;
+    BodyHandle PhysicsManager::createBody(const BodyDef& def) {
+        ShapeRefC shape;
+        if (def.shape == ColliderShape::Sphere) {
+            shape = new SphereShape(def.radius);
+        } else {
+            shape = new BoxShape(toJolt(def.halfExtents));
         }
+
+        const bool dynamic = def.type == BodyType::Dynamic;
+        BodyCreationSettings settings(shape, toJolt(def.position), toJolt(def.rotation),
+            dynamic ? EMotionType::Dynamic : EMotionType::Static,
+            dynamic ? Layers::MOVING : Layers::NON_MOVING);
+
+        const BodyID id = impl->physicsSystem.GetBodyInterface().CreateAndAddBody(
+            settings, dynamic ? EActivation::Activate : EActivation::DontActivate);
+        return id.GetIndexAndSequenceNumber();
+    }
+
+    void PhysicsManager::removeBody(BodyHandle handle) {
+        if (handle == InvalidBody) return;
+        BodyInterface& bodyInterface = impl->physicsSystem.GetBodyInterface();
+        const BodyID id(handle);
+        bodyInterface.RemoveBody(id);
+        bodyInterface.DestroyBody(id);
+    }
+
+    void PhysicsManager::getBodyTransform(BodyHandle handle, glm::vec3& outPosition, glm::quat& outRotation) const {
+        RVec3 position;
+        Quat rotation;
+        impl->physicsSystem.GetBodyInterface().GetPositionAndRotation(BodyID(handle), position, rotation);
+        outPosition = toGlm(position);
+        outRotation = toGlm(rotation);
+    }
+
+    void PhysicsManager::setBodyTransform(BodyHandle handle, const glm::vec3& position, const glm::quat& rotation) {
+        impl->physicsSystem.GetBodyInterface().SetPositionAndRotation(
+            BodyID(handle), toJolt(position), toJolt(rotation), EActivation::Activate);
     }
 
     void PhysicsManager::debugDraw() {
@@ -224,4 +245,4 @@ namespace ytail {
     const std::vector<JoltDebugVertex>& PhysicsManager::getDebugLines() const {
         return impl->debugRenderer.getLines();
     }
-} // ytail
+} // ytail::physics

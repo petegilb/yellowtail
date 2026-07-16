@@ -18,7 +18,6 @@
 namespace ytail {
     class ResourceManager;
     class Application;
-    class PhysicsManager;
     class DebugLineRenderer;
 
     class Engine {
@@ -117,9 +116,6 @@ namespace ytail {
 
         // ResourceManager that handles the lifetimes of objects loaded into memory
         std::unique_ptr<ytail::ResourceManager> resourceManager;
-
-        // Jolt physics world. Stepped from the tick (a fixed-step loop comes later).
-        std::unique_ptr<ytail::PhysicsManager> physicsManager;
 
         // Draws the physics debug wireframe. Off unless showPhysicsShapes is enabled.
         std::unique_ptr<ytail::DebugLineRenderer> debugLineRenderer;

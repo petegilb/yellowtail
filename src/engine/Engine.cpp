@@ -91,7 +91,7 @@ namespace ytail {
         }
         BasePath = SDL_GetBasePath();
         resourceManager = std::make_unique<ResourceManager>(device, window, BasePath);
-        physicsManager = std::make_unique<PhysicsManager>();
+        physics::PhysicsManager::get();
         debugLineRenderer = std::make_unique<DebugLineRenderer>(device);
         initializeImGui();
 
@@ -172,7 +172,7 @@ namespace ytail {
 
     void Engine::fixedTick(float deltaTime) {
         // engine (physics), then app, then components.
-        if (physicsManager) physicsManager->step(deltaTime);
+        physics::PhysicsManager::get().step(deltaTime);
         if (app) app->fixedTick(deltaTime);
         for (const auto& [id, entity] : entities) {
             if (entity) entity->fixedTick(deltaTime);
@@ -304,9 +304,9 @@ namespace ytail {
 
         // Physics debug wireframe: regenerate the geometry and stage it. The upload runs a copy
         // pass, so like ImGui it has to happen before BeginRenderPass.
-        if (showPhysicsShapes && physicsManager && debugLineRenderer) {
-            physicsManager->debugDraw();
-            debugLineRenderer->upload(commandBuffer, physicsManager->getDebugLines());
+        if (showPhysicsShapes && debugLineRenderer) {
+            physics::PhysicsManager::get().debugDraw();
+            debugLineRenderer->upload(commandBuffer, physics::PhysicsManager::get().getDebugLines());
         }
 
         // Depth+stencil attachment for the geometry pass. Depth clears to the far plane (1.0);
