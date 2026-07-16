@@ -1,12 +1,12 @@
 # yellowtail
 
-Cross-platform SDL3 project. Used as a playground and to learn to code games without an engine as well as learn more about rendering and C++. All dependencies are fetched and built from source via CMake `FetchContent`, so no system packages are required. Builds on Windows (MSVC), Linux, and macOS from a single `CMakeLists.txt`.
+Cross-platform SDL3 project. Used as a playground and to learn to code games without an engine as well as learn more about rendering and C++. All dependencies are fetched and built from source via CMake `FetchContent`, so no system packages are required. Builds on Windows (MSVC), Linux, and macOS from `CMakeLists.txt`.
+
+Right now it's got an editor and a game target. The editor will be used to create scenes and the game will house all game info. Both access engine, but the engine doesn't access the game or editor object. They both inherit from an interface called Application.
 
 ## Build
 
-**Windows: use the MSVC toolchain, not MinGW.** DirectX Shader Compiler (pulled in transitively by SDL_shadercross) has no working MinGW build path. Its `MSSupport` module relies on `<windows.h>` types being force-included through MSVC's PCH machinery, and its non-Windows shim (`dxc/WinAdapter.h`) is gated on `!_MSC_VER`, not `!_WIN32`. A MinGW build gets neither and fails with hundreds of "`BOOL` / `HANDLE` / `HRESULT` does not name a type" errors. In CLion: **Settings, Build, Execution, Deployment, Toolchains, + Visual Studio** (needs Visual Studio Build Tools or full VS installed), move it to the top so it's the default, then in **Settings, Build, Execution, Deployment, CMake** delete existing profiles and add fresh Debug/Release profiles using the Visual Studio toolchain. Blow away `cmake-build-*/` before reconfiguring.
-
-Open the project in CLion - it'll configure into `cmake-build-debug/` and `cmake-build-release/` automatically. Build/run via the toolbar, or from a terminal:
+**Windows: use the MSVC toolchain, not MinGW.** DirectX Shader Compiler (pulled in by SDL_shadercross) has no working MinGW build path
 
 The build produces two executables that share a common `engine` static library: `ytail_game`
 (the game) and `ytail_editor` (the editor host). Build and run whichever you want:
@@ -19,15 +19,7 @@ cmake --build cmake-build-debug --target ytail_editor -j
 ./cmake-build-debug/ytail_editor/ytail_editor
 ```
 
-The first clean configure takes **5 to 15 minutes**. It clones and builds SDL3, plus DXC (DirectX Shader Compiler, a fork of LLVM/Clang pulled in by SDL_shadercross) and SPIRV-Cross from source. Subsequent incremental builds are fast because everything is cached under `cmake-build-debug/_deps/`. **Avoid deleting the build dir** unless you actually need to reconfigure from scratch.
-
-**One CLion pitfall on Windows.** DXC ships a standalone `clang` executable target (`tools/clang/tools/driver`) whose `cc1_main.cpp` / `cc1as_main.cpp` call stale `llvm::opt` / `CompilerInstance` APIs. It will not compile against modern MSVC. Yellowtail never links `clang`, and DXC's own CMake marks it `EXCLUDE_FROM_ALL`, but CLion's "Build Project" (`Ctrl+F9`) runs `ninja all`, which re-includes it. Make sure the Run/Debug configuration's **Before launch** step builds a specific executable target (`ytail_game` or `ytail_editor`), not "Project":
-
-1. Toolbar, **Edit Configurations...**
-2. Select the run config, then the **Before launch** panel at the bottom.
-3. Remove any "Build 'Project'" entry; add **Build** with target = `ytail_game` (or `ytail_editor`).
-
-Then the play button only builds that target's dependency chain (`engine`, `dxcompiler`, `dxildll`, SPIRV-Cross, etc.) and never touches the broken standalone `clang`.
+Need to make sure you choose ytail_editor or ytail_game as the target in your IDE (not clang).
 
 ## Project layout
 
@@ -37,8 +29,8 @@ yellowtail/
 ├── src/
 │   ├── CMakeLists.txt    # engine static lib + ytail_game / ytail_editor exes
 │   ├── engine/           # engine runtime -> static `engine` library
-│   ├── game/main.cpp     # ytail_game entry point
-│   └── editor/main.cpp   # ytail_editor entry point
+│   ├── game/             # ytail_game entry point
+│   └── editor/           # ytail_editor entry point
 ├── external/             # third-party single-header libraries
 │   └── cgltf.h
 └── assets/               # textures, models, audio, shaders - anything loaded at runtime
@@ -79,18 +71,10 @@ Some info on shadercross: https://moonside.games/posts/introducing-sdl-shadercro
 
 `SDL_gpu` is built into SDL3 itself - no extra dependency for the GPU API. But each backend wants a different shader format (Vulkan→SPIR-V, D3D12→DXIL, Metal→MSL). SDL_shadercross translates from HLSL or SPIR-V into whatever the active backend needs at runtime:
 
-```cpp
-#include <SDL3_shadercross/SDL_shadercross.h>
+Current workflow: fastest iteration loop, edit HLSL and re-run. The trade-off is binary size (DXC adds tens of MB) and the slow first-time build. Two alternative workflows you can migrate to later:
 
-// load assets/shaders/triangle.hlsl, pass to:
-SDL_ShaderCross_HLSL_Info info{ /* source, entrypoint, stage, ... */ };
-SDL_GPUShader* shader = SDL_ShaderCross_CompileGraphicsShaderFromHLSL(device, &info, ...);
-```
-
-This is the "pattern #1" workflow - fastest iteration loop, edit HLSL and re-run. The trade-off is binary size (DXC adds tens of MB) and the slow first-time build. Two alternative workflows you can migrate to later:
-
-- **Pattern #3 (hybrid)**: precompile HLSL → SPIR-V offline using the `shadercross` CLI, then translate SPIR-V → DXIL/MSL at runtime via SPIRV-Cross. Drops the DXC runtime dep. Flip `SDLSHADERCROSS_DXC=OFF` and `SDLSHADERCROSS_CLI=ON` in `CMakeLists.txt`.
-- **Pattern #2 (full offline)**: precompile to all three formats offline, pick at runtime with `SDL_GetGPUShaderFormats(device)`. No runtime translator dep. Most work, smallest binary.
+- **hybrid**: precompile HLSL → SPIR-V offline using the `shadercross` CLI, then translate SPIR-V → DXIL/MSL at runtime via SPIRV-Cross. Drops the DXC runtime dep. Flip `SDLSHADERCROSS_DXC=OFF` and `SDLSHADERCROSS_CLI=ON` in `CMakeLists.txt`.
+- **full offline**: precompile to all three formats offline, pick at runtime with `SDL_GetGPUShaderFormats(device)`. No runtime translator dep. Most work, smallest binary.
 
 ## CMake notes
 
