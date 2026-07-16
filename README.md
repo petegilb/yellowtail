@@ -68,6 +68,8 @@ yellowtail/
 - https://gdcvault.com/play/1027891/Architecting-Jolt-Physics-for-Horizon
 - https://github.com/ocornut/imgui/blob/master/examples/example_sdl3_sdlgpu3/main.cpp
 - https://www.gafferongames.com/post/fix_your_timestep/
+- https://www.opengl-tutorial.org/miscellaneous/clicking-on-objects/picking-with-custom-ray-obb-function/
+- https://webgpufundamentals.org/webgpu/lessons/webgpu-picking.html
 
 ## Shaders (SDL_gpu via SDL_shadercross)
 

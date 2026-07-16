@@ -52,6 +52,9 @@ namespace ytail {
         // different pieces of the main mesh so we can have multiple materials per mesh
         std::vector<Submesh> submeshes;   // the material-slot ranges from earlier
         SDL_GPUIndexElementSize indexSize = SDL_GPU_INDEXELEMENTSIZE_32BIT;
+
+        glm::vec3 aabbMin{0.0f};
+        glm::vec3 aabbMax{0.0f};
     private:
         SDL_GPUDevice* device = nullptr;
     };

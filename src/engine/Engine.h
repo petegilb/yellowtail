@@ -74,6 +74,10 @@ namespace ytail {
         [[nodiscard]] const std::unordered_map<Uint32, std::unique_ptr<Entity>>& getEntities() const { return entities; }
 
         void setActiveCamera(Uint32 id);
+
+        // Build a world-space ray from a window pixel through the active camera. False if no camera.
+        [[nodiscard]] bool screenPointToRay(float screenX, float screenY,
+                                            glm::vec3& outOrigin, glm::vec3& outDir) const;
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;

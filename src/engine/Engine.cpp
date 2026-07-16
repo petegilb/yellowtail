@@ -503,6 +503,38 @@ namespace ytail {
         activeCamera = entities[id].get();
     }
 
+    bool Engine::screenPointToRay(float screenX, float screenY,
+                                  glm::vec3& outOrigin, glm::vec3& outDir) const {
+        if (activeCamera == nullptr) return false;
+        auto* camTransform = activeCamera->getComponent<TransformComponent>();
+        auto* camComp  = activeCamera->getComponent<CameraComponent>();
+        if (camTransform == nullptr || camComp == nullptr) return false;
+
+        int w, h;
+        SDL_GetWindowSize(window, &w, &h);
+        if (w == 0 || h == 0) return false;
+
+        const float aspect = static_cast<float>(w) / static_cast<float>(h);
+        const glm::mat4 view = glm::inverse(camTransform->modelMatrix());
+        const glm::mat4 projection = camComp->projectionMatrix(aspect);
+        const glm::mat4 invViewProj = glm::inverse(projection * view);
+
+        // NDC = normalized device coordinates: the [-1,1] square the screen maps to after
+        // projection. Convert the pixel to NDC (flip y since the screen origin is top-left).
+        const float ndcX = 2.0f * screenX / static_cast<float>(w) - 1.0f;
+        const float ndcY = 1.0f - 2.0f * screenY / static_cast<float>(h);
+
+        // near/far in NDC: z=0 is near, z=1 is far (GLM_FORCE_DEPTH_ZERO_TO_ONE)
+        glm::vec4 nearH = invViewProj * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
+        glm::vec4 farH  = invViewProj * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+        const glm::vec3 nearPoint = glm::vec3(nearH) / nearH.w;
+        const glm::vec3 farPoint  = glm::vec3(farH)  / farH.w;
+
+        outOrigin = camTransform->position;
+        outDir = glm::normalize(farPoint - nearPoint);
+        return true;
+    }
+
     void Engine::initializeImGui(){
         // Setup Dear ImGui context
         IMGUI_CHECKVERSION();

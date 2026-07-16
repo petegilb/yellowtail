@@ -305,6 +305,19 @@ namespace ytail {
 
         // create mesh object and make sure we can store everything properly
         std::shared_ptr<Mesh> mesh = std::make_shared<Mesh>(device, name, vertexBuffer, indexBuffer, submeshes);
+
+        // local-space bounds over all vertices (for an aabb)
+        if (!vertices.empty()) {
+            glm::vec3 aabbMin = vertices[0].position;
+            glm::vec3 aabbMax = vertices[0].position;
+            for (const Vertex& vert : vertices) {
+                aabbMin = glm::min(aabbMin, vert.position);
+                aabbMax = glm::max(aabbMax, vert.position);
+            }
+            mesh->aabbMin = aabbMin;
+            mesh->aabbMax = aabbMax;
+        }
+
         meshes[path] = mesh;
         cgltf_free(data);
         return mesh;

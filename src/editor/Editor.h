@@ -26,6 +26,9 @@ namespace ytail
     protected:
         void handleInput(const SDL_KeyboardEvent& keyboard_event);
 
+        // pick the nearest mesh under a window pixel and select it (0 = nothing hit)
+        void selectAtScreen(float screenX, float screenY);
+
         // id of the entity shown in the inspector; 0 = none (ids start at 1)
         Uint32 selectedEntity = 0;
     };

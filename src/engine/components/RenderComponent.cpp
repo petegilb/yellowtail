@@ -18,8 +18,6 @@ namespace ytail {
     }
 
     void RenderComponent::drawInspector() {
-        ImGui::Checkbox("Outline", &outline);
         ImGui::ColorEdit3("Outline Color", &outlineColor.x);
-        ImGui::DragFloat("Outline Scale", &outlineScale, 0.01f, 1.0f, 2.0f);
     }
 } // ytail

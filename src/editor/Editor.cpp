@@ -5,6 +5,7 @@
 #include "Editor.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <vector>
 
 #include "imgui.h"
@@ -13,12 +14,14 @@
 #include "engine/Engine.h"
 #include "engine/Entity.h"
 #include "engine/Component.h"
+#include "engine/Input.h"
 #include "engine/components/RenderComponent.h"
 #include "engine/components/TransformComponent.h"
 #include "engine/components/CameraComponent.h"
 #include "engine/components/FreeMovementComponent.h"
 #include "engine/components/LightComponent.h"
 #include "engine/components/RigidbodyComponent.h"
+#include "engine/render/Mesh.h"
 #include "engine/managers/ResourceManager.h"
 
 namespace ytail
@@ -42,6 +45,7 @@ namespace ytail
 
         // scene setup
         Entity* camera = engine->addEntity();
+        camera->setName("FlyCam");
         const auto camTransform = camera->addComponent<TransformComponent>();
         camera->addComponent<CameraComponent>();
         engine->setActiveCamera(camera->getId());
@@ -50,6 +54,7 @@ namespace ytail
         camera->addComponent<FreeMovementComponent>();
 
         Entity* light0 = engine->addEntity();
+        light0->setName("Light1");
         const auto lightTransform = light0->addComponent<TransformComponent>();
         const auto lightComponent = light0->addComponent<LightComponent>();
         lightComponent->color = glm::vec3(1.0f, 1.0f, 1.0f);
@@ -84,7 +89,6 @@ namespace ytail
         auto cube2Render = cube2->addComponent<RenderComponent>();
         cube2Render->setMesh(cubeMesh);
         cube2Render->addMaterial(material);
-        cube2Render->outline = true;
         cube2Transform->position = glm::vec3(2.0f, -1.0f, -5.0f);;
 
         // create floor
@@ -137,10 +141,80 @@ namespace ytail
     void Editor::eventTick(const SDL_Event& event){
         if (event.type == SDL_EVENT_KEY_DOWN){
             handleInput(event.key);
+        } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN
+                   && event.button.button == SDL_BUTTON_LEFT
+                   && !ImGui::GetIO().WantCaptureMouse       // not a click on a panel
+                   && !Input::get().isMouseCaptured()) {     // not while right-drag look is active
+            selectAtScreen(event.button.x, event.button.y);
         }
     }
 
     void Editor::tick(float deltaTime){
+    }
+
+    bool rayAabb(const glm::vec3& origin, const glm::vec3& dir,
+                     const glm::vec3& min, const glm::vec3& max, float& tHit) {
+        float tmin = 0.0f;
+        float tmax = FLT_MAX;
+        for (int i = 0; i < 3; ++i) {
+            if (SDL_fabsf(dir[i]) < 1e-8f) {
+                // ray parallel to this slab: miss if the origin is outside it
+                if (origin[i] < min[i] || origin[i] > max[i]) return false;
+            } else {
+                const float inv = 1.0f / dir[i];
+                float t1 = (min[i] - origin[i]) * inv;
+                float t2 = (max[i] - origin[i]) * inv;
+                if (t1 > t2) { const float tmp = t1; t1 = t2; t2 = tmp; }
+                tmin = SDL_max(tmin, t1);
+                tmax = SDL_min(tmax, t2);
+                if (tmin > tmax) return false;
+            }
+        }
+        tHit = tmin;
+        return true;
+    }
+
+    void Editor::selectAtScreen(float screenX, float screenY){
+        glm::vec3 origin, dir;
+        if (!engine->screenPointToRay(screenX, screenY, origin, dir)) return;
+
+        Uint32 picked = 0;
+        float bestT = FLT_MAX;
+        for (const auto& [id, entity] : engine->getEntities()) {
+            if (!entity) continue;
+            auto* transform = entity->getComponent<TransformComponent>();
+            auto* render = entity->getComponent<RenderComponent>();
+            if (!transform || !render || !render->mesh) continue;
+
+            // Transform the ray into mesh-local space. localDir is left un-normalized so the hit
+            // distance stays in the same units across entities (nearest hit wins).
+            const glm::mat4 invModel = glm::inverse(transform->modelMatrix());
+            const glm::vec3 localOrigin = glm::vec3(invModel * glm::vec4(origin, 1.0f));
+            const glm::vec3 localDir    = glm::vec3(invModel * glm::vec4(dir, 0.0f));
+
+            float t;
+            if (rayAabb(localOrigin, localDir, render->mesh->aabbMin, render->mesh->aabbMax, t) && t < bestT) {
+                bestT = t;
+                picked = id;
+            }
+        }
+        //disable outline for old entity
+        if (selectedEntity > 0 && selectedEntity != picked){
+            if (auto oldEnt = engine->getEntity(selectedEntity)){
+                if (auto renderComp = oldEnt->getComponent<RenderComponent>()){
+                    renderComp->outline = false;
+                }
+            }
+        }
+
+        selectedEntity = picked;
+
+        // enable the outline for the selected entity
+        if (auto selectedEnt = engine->getEntity(selectedEntity)){
+            if (auto renderComp = selectedEnt->getComponent<RenderComponent>()){
+                renderComp->outline = true;
+            }
+        }
     }
 
     void Editor::onImGui(){
@@ -198,6 +272,7 @@ namespace ytail
             if (ImGui::InputText("Name", nameBuffer, sizeof(nameBuffer))) {
                 entity->setName(nameBuffer);
             }
+            ImGui::Text("Entity Id: %u", selectedEntity);
             ImGui::Separator();
             for (const auto& component : entity->getComponents()) {
                 ImGui::PushID(component.get());
