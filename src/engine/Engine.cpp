@@ -11,6 +11,7 @@
 #include "imgui_impl_sdlgpu3.h"
 
 #include "Application.h"
+#include "Input.h"
 #include "managers/PhysicsManager.h"
 #include "render/DebugLineRenderer.h"
 #include "components/RenderComponent.h"
@@ -69,6 +70,7 @@ namespace ytail {
             SDL_Log("ClaimWindow failed");
             return -1;
         }
+        Input::get().init(window);
         // Output encode: render in linear, let the swapchain re-encode to sRGB on scanout.
         // SDR_LINEAR makes the swapchain the *_SRGB format, so a linear fragment result is
         // gamma-encoded by the hardware on write. Pairs with the per-texture srgb decode in
@@ -183,6 +185,9 @@ namespace ytail {
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (app) app->eventTick(event);
+            for (const auto& [id, entity] : entities) {
+                if (entity) entity->eventTick(event);
+            }
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)) {
                 bRunning = false;
                 return;
@@ -194,6 +199,10 @@ namespace ytail {
                 case SDL_EVENT_KEY_DOWN:
                     handleInput(event.key);
                     break;
+                case SDL_EVENT_WINDOW_FOCUS_LOST:
+                    // Drop any mouse capture so alt-tabbing mid-drag can't leave the cursor grabbed.
+                    Input::get().setMouseCaptured(false);
+                    break;
                 default: ;
             }
         }
@@ -201,6 +210,8 @@ namespace ytail {
 
     void Engine::updateTick() {
         updateImGui();
+        // Hand the cursor to the UI whenever a menu/overlay is up so gameplay input yields to it.
+        Input::get().setUiActive(showDebugWindow);
         ambientLight = {ambientDebug.x, ambientDebug.y, ambientDebug.z};
         ambientLight *= ambientIntensity;
     }

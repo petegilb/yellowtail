@@ -26,6 +26,9 @@ public:
         void tick(float deltaTime) {
             for (const auto& comp : components) comp->tick(deltaTime);
         }
+        virtual void eventTick(const SDL_Event& event){
+            for (const auto& comp : components) comp->eventTick(event);
+        }
 
         // creates a new component and attaches it to this entity
         template<typename T, typename... Args>
@@ -34,6 +37,7 @@ public:
                           "T must derive from ytail::Component");
             auto owned = std::make_unique<T>(std::forward<Args>(args)...);
             T* ptr = owned.get();
+            ptr->owner = this;
             components.push_back(std::move(owned));
             return ptr;
         }

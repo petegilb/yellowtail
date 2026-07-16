@@ -8,6 +8,7 @@
 #include "engine/components/RenderComponent.h"
 #include "engine/components/TransformComponent.h"
 #include "engine/components/CameraComponent.h"
+#include "engine/components/FreeMovementComponent.h"
 #include "engine/components/LightComponent.h"
 #include "engine/managers/ResourceManager.h"
 
@@ -33,6 +34,7 @@ namespace ytail
         engine->setActiveCamera(camera->getId());
         camTransform->position = glm::vec3(0.0f, 3.0f, 5.0f);   // back up 5 units, looking down -Z toward origin
         camTransform->setRotationEuler(glm::vec3(-30.0f, 0.0f, 0.0f));
+        camera->addComponent<FreeMovementComponent>();
 
         Entity* light0 = engine->addEntity();
         const auto lightTransform = light0->addComponent<TransformComponent>();
