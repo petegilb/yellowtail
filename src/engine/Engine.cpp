@@ -165,6 +165,9 @@ namespace ytail {
             if (entity) entity->tick(deltaTime);
         }
 
+        // UI should be updated right before everything is drawn to match the state of the engine.
+        uiTick();
+
         // Fraction into the next fixed step, so render can interpolate between the last two sim states.
         const float alpha = fixedAccumulator / FIXED_DT;
         renderTick(alpha);
@@ -209,7 +212,6 @@ namespace ytail {
     }
 
     void Engine::updateTick() {
-        updateImGui();
         // Hand the cursor to the UI whenever a menu/overlay is up so gameplay input yields to it.
         Input::get().setUiActive(showDebugWindow);
         ambientLight = {ambientDebug.x, ambientDebug.y, ambientDebug.z};
@@ -255,20 +257,21 @@ namespace ytail {
         drawCallsLastFrame = 0;
 
         // just found this reference: https://dawaralvi.github.io/sdl-gpu/
-        // get the active camera + aspect ratio
+        // get the active camera
         if (activeCamera == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Render camera is null!");
             return -1;
         }
         auto* camXform = activeCamera->getComponent<TransformComponent>();
-        auto* camComp  = activeCamera->getComponent<CameraComponent>();
+        glm::mat4 view, projection;
+        if (!getCameraMatrices(view, projection)) return -1;
+
+        // Pixels here: the depth target and viewport are sized in real pixels, unlike the
+        // projection's aspect, which comes from the logical size in getCameraMatrices.
         int w, h;
         SDL_GetWindowSizeInPixels(window, &w, &h);
         if (h == 0) return 0;
         ensureDepthTexture(w, h);
-        const float aspect = static_cast<float>(w) / static_cast<float>(h);
-        glm::mat4 view = glm::inverse(camXform->modelMatrix());
-        glm::mat4 projection = camComp->projectionMatrix(aspect);
 
         // command buffer of commands to be executed by SDL3_gpu
         // does not need to be freed and can only be used on the thread in which it is created (render thread?)
@@ -503,8 +506,7 @@ namespace ytail {
         activeCamera = entities[id].get();
     }
 
-    bool Engine::screenPointToRay(float screenX, float screenY,
-                                  glm::vec3& outOrigin, glm::vec3& outDir) const {
+    bool Engine::getCameraMatrices(glm::mat4& outView, glm::mat4& outProjection) const {
         if (activeCamera == nullptr) return false;
         auto* camTransform = activeCamera->getComponent<TransformComponent>();
         auto* camComp  = activeCamera->getComponent<CameraComponent>();
@@ -514,9 +516,20 @@ namespace ytail {
         SDL_GetWindowSize(window, &w, &h);
         if (w == 0 || h == 0) return false;
 
-        const float aspect = static_cast<float>(w) / static_cast<float>(h);
-        const glm::mat4 view = glm::inverse(camTransform->modelMatrix());
-        const glm::mat4 projection = camComp->projectionMatrix(aspect);
+        outView = glm::inverse(camTransform->modelMatrix());
+        outProjection = camComp->projectionMatrix(static_cast<float>(w) / static_cast<float>(h));
+        return true;
+    }
+
+    bool Engine::screenPointToRay(float screenX, float screenY,
+                                  glm::vec3& outOrigin, glm::vec3& outDir) const {
+        glm::mat4 view, projection;
+        if (!getCameraMatrices(view, projection)) return false;
+
+        int w, h;
+        SDL_GetWindowSize(window, &w, &h);
+        if (w == 0 || h == 0) return false;
+
         const glm::mat4 invViewProj = glm::inverse(projection * view);
 
         // NDC = normalized device coordinates: the [-1,1] square the screen maps to after
@@ -530,7 +543,7 @@ namespace ytail {
         const glm::vec3 nearPoint = glm::vec3(nearH) / nearH.w;
         const glm::vec3 farPoint  = glm::vec3(farH)  / farH.w;
 
-        outOrigin = camTransform->position;
+        outOrigin = activeCamera->getComponent<TransformComponent>()->position;
         outDir = glm::normalize(farPoint - nearPoint);
         return true;
     }
@@ -589,7 +602,7 @@ namespace ytail {
 
     }
 
-    void Engine::updateImGui(){
+    void Engine::uiTick(){
         // reference: https://github.com/ocornut/imgui/blob/master/examples/example_sdl3_sdlgpu3/main.cpp
         // Start the Dear ImGui frame
         ImGui_ImplSDLGPU3_NewFrame();
@@ -638,11 +651,11 @@ namespace ytail {
         }
 
         // The app (editor) contributes its own windows inside the same ImGui frame.
-        if (app) app->onImGui();
+        if (app) app->uiTick();
     }
 
     void Engine::renderImGui(SDL_GPUCommandBuffer* commandBuffer){
-        // Closes the ImGui frame started in updateImGui() and stages the draw list.
+        // Closes the ImGui frame started in uiTick() and stages the draw list.
         // PrepareDrawData copies vertex/index buffers to GPU memory; this MUST happen
         // outside any render pass (SDL_GPU forbids buffer uploads inside a pass).
         ImGui::Render();

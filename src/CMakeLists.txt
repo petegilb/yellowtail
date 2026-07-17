@@ -81,6 +81,7 @@ file(GLOB_RECURSE EDITOR_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.c)
 file(GLOB_RECURSE EDITOR_HEADERS CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.h)
-add_executable(ytail_editor ${EDITOR_SOURCES} ${EDITOR_HEADERS})
+add_executable(ytail_editor ${EDITOR_SOURCES} ${EDITOR_HEADERS}
+        ${CMAKE_SOURCE_DIR}/external/imguizmo/ImGuizmo.cpp)
 target_link_libraries(ytail_editor PRIVATE engine)
 yt_configure_app(ytail_editor)

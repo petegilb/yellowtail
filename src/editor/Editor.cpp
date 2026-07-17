@@ -10,6 +10,11 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "imguizmo/ImGuizmo.h"
+
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 
 #include "engine/Engine.h"
 #include "engine/Entity.h"
@@ -141,12 +146,19 @@ namespace ytail
     void Editor::eventTick(const SDL_Event& event){
         if (event.type == SDL_EVENT_KEY_DOWN){
             handleInput(event.key);
-        } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN
-                   && event.button.button == SDL_BUTTON_LEFT
-                   && !ImGui::GetIO().WantCaptureMouse       // not a click on a panel
-                   && !Input::get().isMouseCaptured()) {     // not while right-drag look is active
-            selectAtScreen(event.button.x, event.button.y);
+            return;
         }
+        if (event.type != SDL_EVENT_MOUSE_BUTTON_DOWN || event.button.button != SDL_BUTTON_LEFT) return;
+
+        // Only trust the gizmo hit-test while something is selected
+        const bool overGizmo = selectedEntity != 0 && (ImGuizmo::IsOver() || ImGuizmo::IsUsing());
+        if (ImGui::GetIO().WantCaptureMouse
+            || Input::get().isMouseCaptured()
+            || overGizmo) {
+            return;
+        }
+
+        selectAtScreen(event.button.x, event.button.y);
     }
 
     void Editor::tick(float deltaTime){
@@ -198,26 +210,66 @@ namespace ytail
                 picked = id;
             }
         }
-        //disable outline for old entity
-        if (selectedEntity > 0 && selectedEntity != picked){
-            if (auto oldEnt = engine->getEntity(selectedEntity)){
-                if (auto renderComp = oldEnt->getComponent<RenderComponent>()){
-                    renderComp->outline = false;
-                }
+        setSelected(picked);
+    }
+
+    void Editor::setSelected(Uint32 id){
+        if (id == selectedEntity) return;
+
+        if (Entity* previous = engine->getEntity(selectedEntity)){
+            if (auto* renderComp = previous->getComponent<RenderComponent>()){
+                renderComp->outline = false;
             }
         }
 
-        selectedEntity = picked;
+        selectedEntity = id;
 
-        // enable the outline for the selected entity
-        if (auto selectedEnt = engine->getEntity(selectedEntity)){
-            if (auto renderComp = selectedEnt->getComponent<RenderComponent>()){
+        if (Entity* current = engine->getEntity(selectedEntity)){
+            if (auto* renderComp = current->getComponent<RenderComponent>()){
                 renderComp->outline = true;
             }
         }
     }
 
-    void Editor::onImGui(){
+    void Editor::drawGizmo(){
+        Entity* entity = engine->getEntity(selectedEntity);
+        if (entity == nullptr) return;
+        auto* transform = entity->getComponent<TransformComponent>();
+        if (transform == nullptr) return;
+
+        glm::mat4 view, projection;
+        if (!engine->getCameraMatrices(view, projection)) return;
+
+        float snapValue = snapTranslate;
+        if (gizmoOperation == ImGuizmo::ROTATE) snapValue = snapRotateDegrees;
+        else if (gizmoOperation == ImGuizmo::SCALE) snapValue = snapScale;
+        const float snap[3] = { snapValue, snapValue, snapValue };
+
+        glm::mat4 model = transform->modelMatrix();
+        if (!ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(projection),
+                                  gizmoOperation, gizmoMode, glm::value_ptr(model),
+                                  nullptr, gizmoSnap ? snap : nullptr)) {
+            return;
+        }
+
+        // use glm to decompose back into quaternion
+        glm::vec3 scale, translation, skew;
+        glm::quat rotation;
+        glm::vec4 perspective;
+        if (glm::decompose(model, scale, rotation, translation, skew, perspective)) {
+            transform->position = translation;
+            transform->rotation = rotation;
+            transform->scale = scale;
+        }
+    }
+
+    void Editor::uiTick(){
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
+        // panels just draw on top of the swapchain
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGuizmo::SetRect(viewport->Pos.x, viewport->Pos.y, viewport->Size.x, viewport->Size.y);
+
         // Full-window dockspace with a passthrough center, so the 3D scene shows through the
         // middle and panels dock around it. Build a default layout the first time only
         const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
@@ -239,7 +291,7 @@ namespace ytail
         ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
             ImGuiDockNodeFlags_PassthruCentralNode);
 
-        // Toolbar: play/pause the fixed-step simulation
+        // Toolbar: play/pause the fixed-step simulation, then the gizmo controls
         ImGui::Begin("Toolbar");
         const bool simulating = engine->isSimulating();
         if (ImGui::Button(simulating ? "Pause" : "Play")) {
@@ -247,6 +299,36 @@ namespace ytail
         }
         ImGui::SameLine();
         ImGui::TextUnformatted(simulating ? "Simulating" : "Paused");
+
+        ImGui::SameLine(0.0f, 20.0f);
+        if (ImGui::RadioButton("Translate", gizmoOperation == ImGuizmo::TRANSLATE)) gizmoOperation = ImGuizmo::TRANSLATE;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Rotate", gizmoOperation == ImGuizmo::ROTATE)) gizmoOperation = ImGuizmo::ROTATE;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Scale", gizmoOperation == ImGuizmo::SCALE)) gizmoOperation = ImGuizmo::SCALE;
+
+        // ImGuizmo always scales in local space, so the toggle would be a lie there.
+        ImGui::SameLine(0.0f, 20.0f);
+        ImGui::BeginDisabled(gizmoOperation == ImGuizmo::SCALE);
+        bool worldSpace = gizmoMode == ImGuizmo::WORLD;
+        if (ImGui::Checkbox("World", &worldSpace)) {
+            gizmoMode = worldSpace ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine(0.0f, 20.0f);
+        ImGui::Checkbox("Snap", &gizmoSnap);
+        if (gizmoSnap) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(90.0f);
+            if (gizmoOperation == ImGuizmo::ROTATE) {
+                ImGui::DragFloat("##snap", &snapRotateDegrees, 1.0f, 1.0f, 90.0f, "%.0f deg");
+            } else if (gizmoOperation == ImGuizmo::SCALE) {
+                ImGui::DragFloat("##snap", &snapScale, 0.01f, 0.01f, 10.0f, "%.2f");
+            } else {
+                ImGui::DragFloat("##snap", &snapTranslate, 0.1f, 0.01f, 100.0f, "%.2f");
+            }
+        }
         ImGui::End();
 
         // Outliner: every entity, sorted by id for a stable order, click to select
@@ -259,7 +341,7 @@ namespace ytail
             Entity* entity = engine->getEntity(id);
             if (!entity) continue;
             if (ImGui::Selectable(entity->getName().c_str(), id == selectedEntity)) {
-                selectedEntity = id;
+                setSelected(id);
             }
         }
         ImGui::End();
@@ -285,11 +367,23 @@ namespace ytail
             ImGui::TextDisabled("No entity selected");
         }
         ImGui::End();
+
+        drawGizmo();
     }
 
     void Editor::handleInput(const SDL_KeyboardEvent& keyboard_event){
         if (keyboard_event.key == SDLK_ESCAPE) {
             engine->quit();
+            return;
+        }
+
+        // Gizmo modes. disabled when flying
+        if (Input::get().isMouseCaptured() || ImGui::GetIO().WantTextInput) return;
+        switch (keyboard_event.key) {
+            case SDLK_W: gizmoOperation = ImGuizmo::TRANSLATE; break;
+            case SDLK_E: gizmoOperation = ImGuizmo::ROTATE; break;
+            case SDLK_R: gizmoOperation = ImGuizmo::SCALE; break;
+            default: ;
         }
     }
 } // ytail

@@ -33,7 +33,7 @@ namespace ytail {
         virtual void tick(float deltaTime) {}
 
         // Build ImGui windows for the app (editor panels)
-        virtual void onImGui() {}
+        virtual void uiTick() {}
 
     protected:
         Engine* engine;

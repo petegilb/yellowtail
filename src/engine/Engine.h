@@ -41,6 +41,9 @@ namespace ytail {
         void tick(float deltaTime);
 
         void eventTick();
+        
+        // ui tick run right before the render tick
+        void uiTick();
 
         // One fixed simulation step (physics, deterministic gameplay). Driven by the accumulator
         // in tick(), so it runs 0..N times per frame with a constant dt.
@@ -74,6 +77,9 @@ namespace ytail {
         [[nodiscard]] const std::unordered_map<Uint32, std::unique_ptr<Entity>>& getEntities() const { return entities; }
 
         void setActiveCamera(Uint32 id);
+
+        // View + projection matrices for the active camera. False if there's no active camera.
+        [[nodiscard]] bool getCameraMatrices(glm::mat4& outView, glm::mat4& outProjection) const;
 
         // Build a world-space ray from a window pixel through the active camera. False if no camera.
         [[nodiscard]] bool screenPointToRay(float screenX, float screenY,
@@ -132,7 +138,6 @@ namespace ytail {
 
         // dear imgui
         void initializeImGui();
-        void updateImGui();
         void renderImGui(SDL_GPUCommandBuffer* commandBuffer);
         void shutdownImGui();
         ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);

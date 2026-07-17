@@ -79,11 +79,10 @@ android.*
 !src/minshell.html
 !src/shell.html
 
-cmake-build-debug
-cmake-build-release
 .idea
 build
 .DS_Store
 CLAUDE.md
 .claude
 JoltHelloWorld.cpp
+cmake-build*
