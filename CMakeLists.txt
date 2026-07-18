@@ -145,7 +145,7 @@ set(USE_STATIC_MSVC_RUNTIME_LIBRARY  ON  CACHE BOOL   "" FORCE)
 set(DOUBLE_PRECISION                 OFF CACHE BOOL   "" FORCE)
 set(OBJECT_LAYER_BITS                16  CACHE STRING "" FORCE)
 set(USE_AVX2                         ON  CACHE BOOL   "" FORCE)
-set(CPP_RTTI_ENABLED                 OFF CACHE BOOL   "" FORCE)
+set(CPP_RTTI_ENABLED                 ON  CACHE BOOL   "" FORCE)
 set(CPP_EXCEPTIONS_ENABLED           OFF CACHE BOOL   "" FORCE)
 
 FetchContent_Declare(JoltPhysics

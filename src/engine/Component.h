@@ -8,6 +8,7 @@
 #include <SDL3/SDL.h>
 
 namespace ytail {
+    class Entity;
     class Component {
 public:
         Component();
