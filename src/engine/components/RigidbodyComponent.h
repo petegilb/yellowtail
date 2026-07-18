@@ -10,13 +10,13 @@
 namespace ytail {
     class TransformComponent;
 
-    // Ties the sibling transform to a Jolt body. Dynamic bodies drive the transform each fixed
-    // step; static bodies are placed once at creation.
+    // Ties the sibling transform to a Jolt body
     class RigidbodyComponent : public Component {
     public:
         ~RigidbodyComponent() override;
 
         void fixedTick(float deltaTime) override;
+        void tick(float deltaTime) override;
 
         physics::ColliderShape shape = physics::ColliderShape::Box;
         glm::vec3 halfExtents{0.5f};  // box
@@ -27,11 +27,12 @@ namespace ytail {
         void drawInspector() override;
 
     private:
-        // create the body from the sibling transform on the first fixed tick
+        // create the body on the first tick, and rebuild it when an inspector edit marks it dirty
         bool ensureBody();
 
         TransformComponent* transformComp = nullptr;
         physics::BodyHandle body = physics::InvalidBody;
+        bool bodyDirty = false;
     };
 } // ytail
 

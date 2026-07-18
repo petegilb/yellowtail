@@ -14,6 +14,7 @@
 #include <glm/glm.hpp>
 
 #include "Entity.h"
+#include "GameplayStatics.h"
 
 namespace ytail {
     class ResourceManager;
@@ -54,10 +55,10 @@ namespace ytail {
         // alpha is the fraction (0..1) into the next fixed step, for interpolating rendered state.
         int renderTick(float alpha);
 
-        // Play/pause the fixed simulation. The game leaves this on; the editor toggles it so it
-        // can hold a static scene in edit mode and simulate on demand.
-        void setSimulating(bool value) { simulating = value; }
-        [[nodiscard]] bool isSimulating() const { return simulating; }
+        // set the play state of the engine (i.e. paused or simulating)
+        void setPlayState(PlayState newState) {playState = newState;}
+        [[nodiscard]] bool isSimulating() const { return playState == PlayState::Simulating; }
+        [[nodiscard]] PlayState getPlayState() const { return playState; }
 
         // count of fixed steps run. The backbone for networking (tag state/inputs by tick).
         [[nodiscard]] Uint64 getTickNumber() const { return tickNumber; }
@@ -108,11 +109,10 @@ namespace ytail {
         // Past this, the sim briefly runs in slow motion instead of trying to replay every missed step.
         static constexpr float MAX_ACCUMULATOR = 0.25f;
 
-        // Fixed-step simulation state. Leftover time carried between frames, the running fixed-step
-        // count, and whether the sim is advancing (see setSimulating).
+        // Fixed-step simulation state. Leftover time carried between frames, the running fixed-step count
         float fixedAccumulator = 0.0f;
         Uint64 tickNumber = 0;
-        bool simulating = true;
+        PlayState playState = PlayState::Simulating;
 
         // locks the framerate if greater than 0
         int framerateLock = 0;

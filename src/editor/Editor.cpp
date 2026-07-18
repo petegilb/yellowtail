@@ -42,8 +42,7 @@ namespace ytail
     void Editor::start(){
         SDL_Log("Editor started!");
 
-        // Editor opens in edit mode; the user presses Play to simulate.
-        engine->setSimulating(false);
+        engine->setPlayState(PlayState::Paused);
         // TODO make the scene reset when turning off simulating (it should load from our scene file once that exists)
 
         ResourceManager* resourceManager = engine->getResourceManager();
@@ -113,15 +112,10 @@ namespace ytail
         std::shared_ptr<Mesh> floorMesh = resourceManager->getMesh("models/floor.glb");
         floorRender->setMesh(floorMesh);
         floorRender->addMaterial(floorMaterial);
-
-        // physics: static floor collider, sitting so its top lines up with the visual floor (y = -2)
-        Entity* floorBody = engine->addEntity();
-        auto floorBodyTransform = floorBody->addComponent<TransformComponent>();
-        floorBodyTransform->position = glm::vec3(0.0f, -3.0f, 0.0f);
-        auto floorCollider = floorBody->addComponent<RigidbodyComponent>();
+        auto floorCollider = floor->addComponent<RigidbodyComponent>();
         floorCollider->type = physics::BodyType::Static;
         floorCollider->shape = physics::ColliderShape::Box;
-        floorCollider->halfExtents = glm::vec3(50.0f, 1.0f, 50.0f);
+        floorCollider->halfExtents = glm::vec3(10.0f, 0.1f, 10.0f);
 
         // physics: a sphere that falls onto the floor
         Entity* sphere = engine->addEntity();
@@ -295,7 +289,7 @@ namespace ytail
         ImGui::Begin("Toolbar");
         const bool simulating = engine->isSimulating();
         if (ImGui::Button(simulating ? "Pause" : "Play")) {
-            engine->setSimulating(!simulating);
+            simulating ? engine->setPlayState(PlayState::Paused) : engine->setPlayState(PlayState::Simulating);
         }
         ImGui::SameLine();
         ImGui::TextUnformatted(simulating ? "Simulating" : "Paused");

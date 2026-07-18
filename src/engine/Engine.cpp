@@ -22,6 +22,8 @@
 
 namespace ytail {
     Engine::Engine() {
+        GameplayStatics::engine = this;
+
         SDL_SetLogPriorities(logPriority);
 
         SDL_Log("Starting yellowtail...");
@@ -44,6 +46,8 @@ namespace ytail {
         debugLineRenderer.reset(); // frees the debug line vertex/transfer buffers
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
         if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
+
+        GameplayStatics::engine = nullptr;
 
         SDL_ShaderCross_Quit();
         if (device && window) SDL_ReleaseWindowFromGPUDevice(device, window);
@@ -149,7 +153,7 @@ namespace ytail {
 
         // Fixed-step simulation: accumulate real time and drain it in constant-sized steps, so the
         // sim advances at FIXED_DT no matter the frame rate.
-        if (simulating) {
+        if (isSimulating()) {
             fixedAccumulator += deltaTime;
             fixedAccumulator = std::min(fixedAccumulator, MAX_ACCUMULATOR);
             while (fixedAccumulator >= FIXED_DT) {

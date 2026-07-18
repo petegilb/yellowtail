@@ -8,6 +8,7 @@
 
 #include "TransformComponent.h"
 #include "engine/Entity.h"
+#include "engine/GameplayStatics.h"
 
 namespace ytail {
     using namespace physics;
@@ -22,7 +23,13 @@ namespace ytail {
         }
         if (transformComp == nullptr) return false;
 
-        // Create the body once, seeded from the transform's starting pose.
+        if (bodyDirty && body != InvalidBody) {
+            PhysicsManager::get().removeBody(body);
+            body = InvalidBody;
+        }
+        bodyDirty = false;
+
+        // Create the body from the transform's current pose.
         if (body == InvalidBody) {
             BodyDef def;
             def.shape = shape;
@@ -45,17 +52,36 @@ namespace ytail {
         }
     }
 
+    void RigidbodyComponent::tick(float deltaTime) {
+        // we want to be able to edit the physics bodies in the editor so still run this on tick.
+        if (!ensureBody()) return;
+
+        // When we're paused we take the transform from the gizmo but if we're simulating we trust the simulation
+        if (!GameplayStatics::isSimulating()) {
+            PhysicsManager::get().setBodyTransform(body, transformComp->position, transformComp->rotation);
+        }
+    }
+
     void RigidbodyComponent::drawInspector() {
         const char* typeNames[] = { "Static", "Dynamic" };
         const char* shapeNames[] = { "Box", "Sphere" };
-        ImGui::Text("Type: %s", typeNames[static_cast<int>(type)]);
-        ImGui::Text("Shape: %s", shapeNames[static_cast<int>(shape)]);
+
+        int typeIdx = static_cast<int>(type);
+        if (ImGui::Combo("Type", &typeIdx, typeNames, IM_ARRAYSIZE(typeNames))) {
+            type = static_cast<BodyType>(typeIdx);
+            bodyDirty = true;
+        }
+
+        int shapeIdx = static_cast<int>(shape);
+        if (ImGui::Combo("Shape", &shapeIdx, shapeNames, IM_ARRAYSIZE(shapeNames))) {
+            shape = static_cast<ColliderShape>(shapeIdx);
+            bodyDirty = true;
+        }
 
         if (shape == ColliderShape::Box) {
-            ImGui::DragFloat3("Half Extents", &halfExtents.x, 0.1f);
+            if (ImGui::DragFloat3("Half Extents", &halfExtents.x, 0.1f, 0.01f, 1000.f)) bodyDirty = true;
         } else {
-            ImGui::DragFloat("Radius", &radius, 0.1f);
+            if (ImGui::DragFloat("Radius", &radius, 0.1f, 0.01f, 1000.f)) bodyDirty = true;
         }
-        ImGui::TextDisabled("(edits apply on next body creation)");
     }
 } // ytail
