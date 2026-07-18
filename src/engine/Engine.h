@@ -66,8 +66,21 @@ namespace ytail {
         // Create (or resize) the depth+stencil texture to match the given pixel size.
         void ensureDepthTexture(int width, int height);
 
+        // Offscreen scene color target the geometry pass renders into (scaled res, blitted to swapchain).
+        void ensureSceneColorTexture(int width, int height);
+
+        // Pixel size the scene renders at: window pixels * resolutionScale, clamped to >= 1.
+        void getRenderTargetSize(int& outWidth, int& outHeight) const;
+
         // Switch the swapchain present mode at runtime (VSYNC/MAILBOX/IMMEDIATE)
         void setPresentMode(SDL_GPUPresentMode mode);
+
+        enum class WindowMode { Windowed, Borderless, Fullscreen };
+        void setWindowMode(WindowMode mode);
+        void setResolution(int width, int height);
+        void setTargetDisplay(SDL_DisplayID display);
+        // Unique resolutions supported by the given display (0 == the window's current display).
+        [[nodiscard]] std::vector<glm::ivec2> getAvailableResolutions(SDL_DisplayID display) const;
 
         void handleInput(const SDL_KeyboardEvent& keyboard_event);
 
@@ -100,9 +113,28 @@ namespace ytail {
         int depthTextureW = 0;
         int depthTextureH = 0;
 
+        // Offscreen scene color target, recreated when the scaled resolution changes.
+        SDL_GPUTexture* sceneColorTexture = nullptr;
+        int sceneColorW = 0;
+        int sceneColorH = 0;
+
         // Recorded so a present-mode change re-applies the same composition
         SDL_GPUSwapchainComposition swapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR;
         SDL_GPUPresentMode presentMode = SDL_GPU_PRESENTMODE_VSYNC;
+
+        // Display settings driven from the debug menu.
+        WindowMode windowMode = WindowMode::Windowed;
+        // size the windowed window restores to
+        int windowedWidth = 1280;        
+        int windowedHeight = 720;
+        // exclusive-fullscreen target; 0 == use the desktop mode
+        int fullscreenWidth = 0;         
+        int fullscreenHeight = 0;
+        // 0.25..2.0, scales the offscreen target's pixel size
+        float resolutionScale = 1.0f;    
+        float uiScale = 1.0f;
+        // 0 == primary/current
+        SDL_DisplayID targetDisplay = 0;
 
         // Fixed simulation timestep: 60 steps/sec. Physics + deterministic gameplay run at this rate
         // regardless of render frame rate.
@@ -140,7 +172,7 @@ namespace ytail {
 
         // dear imgui
         void initializeImGui();
-        void renderImGui(SDL_GPUCommandBuffer* commandBuffer);
+        void renderImGui(SDL_GPUCommandBuffer* commandBuffer, Uint32 fbWidth, Uint32 fbHeight);
         void shutdownImGui();
         ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
         ImVec4 ambientDebug = ImVec4(1.f, 1.f, 1.f, 1.00f);

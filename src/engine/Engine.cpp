@@ -46,6 +46,7 @@ namespace ytail {
         debugLineRenderer.reset(); // frees the debug line vertex/transfer buffers
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
         if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
+        if (device && sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
 
         GameplayStatics::engine = nullptr;
 
@@ -65,7 +66,7 @@ namespace ytail {
             SDL_Log("CreateDevice failed");
             return -1;
         }
-        window = SDL_CreateWindow("yellowtail.", 1280, 720, 0);
+        window = SDL_CreateWindow("yellowtail.", 1280, 720, SDL_WINDOW_RESIZABLE);
         if (!window) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error creating SDL window! %s", SDL_GetError());
             return -1;
@@ -243,6 +244,34 @@ namespace ytail {
         }
     }
 
+    void Engine::getRenderTargetSize(int& outWidth, int& outHeight) const {
+        int pw, ph;
+        SDL_GetWindowSizeInPixels(window, &pw, &ph);
+        outWidth  = std::max(1, static_cast<int>(pw * resolutionScale));
+        outHeight = std::max(1, static_cast<int>(ph * resolutionScale));
+    }
+
+    void Engine::ensureSceneColorTexture(int width, int height) {
+        if (sceneColorTexture && sceneColorW == width && sceneColorH == height) return;
+        if (sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
+
+        SDL_GPUTextureCreateInfo info = {};
+        info.type                 = SDL_GPU_TEXTURETYPE_2D;
+        // Match the swapchain format the pipelines are built against, and allow sampling for the blit.
+        info.format               = SDL_GetGPUSwapchainTextureFormat(device, window);
+        info.usage                = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        info.width                = static_cast<Uint32>(width);
+        info.height               = static_cast<Uint32>(height);
+        info.layer_count_or_depth = 1;
+        info.num_levels           = 1;
+        sceneColorTexture = SDL_CreateGPUTexture(device, &info);
+        sceneColorW = width;
+        sceneColorH = height;
+        if (sceneColorTexture == nullptr) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create scene color texture: %s", SDL_GetError());
+        }
+    }
+
     void Engine::setPresentMode(SDL_GPUPresentMode mode) {
         if (mode == presentMode) return;
         if (!SDL_WindowSupportsGPUPresentMode(device, window, mode)) {
@@ -255,6 +284,73 @@ namespace ytail {
             return;
         }
         presentMode = mode;
+    }
+
+    void Engine::setWindowMode(WindowMode mode) {
+        windowMode = mode;
+        // 0 means "current/primary" - resolve to the display the window is on.
+        SDL_DisplayID display = targetDisplay ? targetDisplay : SDL_GetDisplayForWindow(window);
+
+        switch (mode) {
+            case WindowMode::Windowed:
+                SDL_SetWindowFullscreen(window, false);
+                SDL_SetWindowSize(window, windowedWidth, windowedHeight);
+                SDL_SetWindowPosition(window,
+                    SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+                break;
+            case WindowMode::Borderless:
+                SDL_SetWindowFullscreenMode(window, nullptr); // desktop mode, no resolution switch
+                SDL_SetWindowFullscreen(window, true);
+                break;
+            case WindowMode::Fullscreen: {
+                // Default to the desktop mode (keeps the current HiDPI resolution instead of jumping
+                // to native pixels). include_high_density=true so Retina modes stay valid matches.
+                const SDL_DisplayMode* target = SDL_GetDesktopDisplayMode(display);
+                SDL_DisplayMode closest;
+                if (fullscreenWidth > 0 && fullscreenHeight > 0 &&
+                    SDL_GetClosestFullscreenDisplayMode(display, fullscreenWidth, fullscreenHeight, 0.0f, true, &closest)) {
+                    target = &closest;
+                }
+                SDL_SetWindowFullscreenMode(window, target);
+                SDL_SetWindowFullscreen(window, true);
+                break;
+            }
+        }
+    }
+
+    void Engine::setResolution(int width, int height) {
+        // Only exclusive fullscreen uses an explicit resolution.
+        fullscreenWidth = width;
+        fullscreenHeight = height;
+        if (windowMode == WindowMode::Fullscreen) setWindowMode(windowMode);
+    }
+
+    std::vector<glm::ivec2> Engine::getAvailableResolutions(SDL_DisplayID display) const {
+        if (display == 0) display = SDL_GetDisplayForWindow(window);
+        std::vector<glm::ivec2> out;
+        int count = 0;
+        SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(display, &count);
+        if (modes) {
+            for (int i = 0; i < count; ++i) {
+                // dedupe: modes repeat per refresh rate
+                glm::ivec2 r{ modes[i]->w, modes[i]->h };
+                if (std::find(out.begin(), out.end(), r) == out.end()) out.push_back(r);
+            }
+            SDL_free(modes);
+        }
+        // Some backends (e.g. Wayland) report no exclusive modes; fall back to the desktop size.
+        if (out.empty()) {
+            if (const SDL_DisplayMode* dm = SDL_GetDesktopDisplayMode(display)) out.push_back({ dm->w, dm->h });
+        }
+        return out;
+    }
+
+    void Engine::setTargetDisplay(SDL_DisplayID display) {
+        targetDisplay = display;
+        // Drop any fullscreen resolution choice so the new display uses its own desktop mode.
+        fullscreenWidth = 0;
+        fullscreenHeight = 0;
+        setWindowMode(windowMode);
     }
 
     int Engine::renderTick(float alpha) {
@@ -270,11 +366,13 @@ namespace ytail {
         glm::mat4 view, projection;
         if (!getCameraMatrices(view, projection)) return -1;
 
-        // Pixels here: the depth target and viewport are sized in real pixels, unlike the
-        // projection's aspect, which comes from the logical size in getCameraMatrices.
+        // Scene targets are sized in real pixels * resolutionScale; the projection's aspect comes
+        // from the logical size in getCameraMatrices, so it needs no adjustment.
         int w, h;
-        SDL_GetWindowSizeInPixels(window, &w, &h);
-        if (h == 0) return 0;
+        getRenderTargetSize(w, h);
+        // minimized (clamped to 1): skip the frame
+        if (h <= 1) return 0;
+        ensureSceneColorTexture(w, h);
         ensureDepthTexture(w, h);
 
         // command buffer of commands to be executed by SDL3_gpu
@@ -289,7 +387,8 @@ namespace ytail {
         // allow rendering into one texture while another is being displayed
         // help avoid tearing, flickering, and stuttering
         SDL_GPUTexture* swapchainTexture;
-        if (!SDL_WaitAndAcquireGPUSwapchainTexture(commandBuffer, window, &swapchainTexture, nullptr, nullptr)) {
+        Uint32 swapchainW = 0, swapchainH = 0;
+        if (!SDL_WaitAndAcquireGPUSwapchainTexture(commandBuffer, window, &swapchainTexture, &swapchainW, &swapchainH)) {
             SDL_Log("WaitAndAcquireGPUSwapchainTexture failed: %s", SDL_GetError());
             SDL_SubmitGPUCommandBuffer(commandBuffer);
             return -1;
@@ -300,14 +399,17 @@ namespace ytail {
             return -1;
         }
 
+        // Scene renders into the offscreen target (scaled res), then gets blitted to the swapchain.
+        // "Blitting" is a computer graphics operation that allows for the rapid copying of a
+        // rectangular block of pixels from one image buffer to another (according to my duckduckgo search lol)
         SDL_GPUColorTargetInfo colorTargetInfo = { nullptr };
-        colorTargetInfo.texture = swapchainTexture;
+        colorTargetInfo.texture = sceneColorTexture;
         colorTargetInfo.clear_color = SDL_FColor{ clear_color.x, clear_color.y, clear_color.z, clear_color.w };
         colorTargetInfo.load_op = SDL_GPU_LOADOP_CLEAR;
         colorTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
 
         // ImGui uploads its vertex/index data here -- needs to be before BeginRenderPass
-        renderImGui(commandBuffer);
+        renderImGui(commandBuffer, swapchainW, swapchainH);
 
         // Physics debug wireframe: regenerate the geometry and stage it. The upload runs a copy
         // pass, so like ImGui it has to happen before BeginRenderPass.
@@ -473,8 +575,22 @@ namespace ytail {
 
         SDL_EndGPURenderPass(renderPass);
 
-        // UI pass: composite ImGui on top of the finished scene. Color-only (no depth target)
-        SDL_GPUColorTargetInfo uiTargetInfo = colorTargetInfo;
+        // Blit the scaled scene target up/down to the swapchain (linear filter). This is where
+        // resolution scale takes effect; ImGui then draws on top at native swapchain resolution.
+        SDL_GPUBlitInfo blit = {};
+        blit.source.texture      = sceneColorTexture;
+        blit.source.w            = static_cast<Uint32>(w);
+        blit.source.h            = static_cast<Uint32>(h);
+        blit.destination.texture = swapchainTexture;
+        blit.destination.w       = swapchainW;
+        blit.destination.h       = swapchainH;
+        blit.load_op             = SDL_GPU_LOADOP_DONT_CARE;
+        blit.filter              = SDL_GPU_FILTER_LINEAR;
+        SDL_BlitGPUTexture(commandBuffer, &blit);
+
+        // UI pass: composite ImGui on top of the blitted scene. Color-only (no depth target).
+        SDL_GPUColorTargetInfo uiTargetInfo = { nullptr };
+        uiTargetInfo.texture  = swapchainTexture;
         uiTargetInfo.load_op  = SDL_GPU_LOADOP_LOAD;
         uiTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
         SDL_GPURenderPass* uiPass = SDL_BeginGPURenderPass(commandBuffer, &uiTargetInfo, 1, nullptr);
@@ -613,6 +729,7 @@ namespace ytail {
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         ImGuiIO& io = ImGui::GetIO();
+        io.FontGlobalScale = uiScale;
 
         // ImGui::ShowDemoWindow(); // Show demo window! :)
 
@@ -622,6 +739,68 @@ namespace ytail {
             ImGui::Text("Debug Window...");
             ImGui::ColorEdit3("Clear Color", (float*)&clear_color);
             ImGui::SliderInt("FPS Lock", &framerateLock, -1, 999);
+
+            if (ImGui::CollapsingHeader("Display")) {
+                const char* windowModeNames[] = { "Windowed", "Borderless", "Fullscreen" };
+                int windowModeIdx = static_cast<int>(windowMode);
+                if (ImGui::Combo("Window Mode", &windowModeIdx, windowModeNames, 3)) {
+                    setWindowMode(static_cast<WindowMode>(windowModeIdx));
+                }
+
+                // Resolution is only a real choice in Fullscreen. Windowed resizes by dragging,
+                // Borderless follows the desktop; in those modes we just show the current size.
+                if (windowMode == WindowMode::Fullscreen) {
+                    // Default selection is the desktop mode when no explicit resolution is set.
+                    int selW = fullscreenWidth, selH = fullscreenHeight;
+                    if (selW == 0) {
+                        SDL_DisplayID d = targetDisplay ? targetDisplay : SDL_GetDisplayForWindow(window);
+                        if (const SDL_DisplayMode* dm = SDL_GetDesktopDisplayMode(d)) { selW = dm->w; selH = dm->h; }
+                    }
+                    std::vector<glm::ivec2> resolutions = getAvailableResolutions(targetDisplay);
+                    std::vector<std::string> resLabels;
+                    std::vector<const char*> resNames;
+                    int resIdx = 0;
+                    resLabels.reserve(resolutions.size());
+                    for (size_t i = 0; i < resolutions.size(); ++i) {
+                        resLabels.push_back(std::to_string(resolutions[i].x) + " x " + std::to_string(resolutions[i].y));
+                        if (resolutions[i].x == selW && resolutions[i].y == selH) resIdx = static_cast<int>(i);
+                    }
+                    for (auto& s : resLabels) resNames.push_back(s.c_str());
+                    ImGui::BeginDisabled(resNames.empty());
+                    if (ImGui::Combo("Resolution", &resIdx, resNames.data(), static_cast<int>(resNames.size()))) {
+                        setResolution(resolutions[resIdx].x, resolutions[resIdx].y);
+                    }
+                    ImGui::EndDisabled();
+                } else {
+                    int cw, ch;
+                    SDL_GetWindowSize(window, &cw, &ch);
+                    ImGui::Text("Resolution: %d x %d", cw, ch);
+                }
+
+                // Monitor list, with a leading "Auto" entry that maps to display id 0.
+                int displayCount = 0;
+                SDL_DisplayID* displays = SDL_GetDisplays(&displayCount);
+                std::vector<SDL_DisplayID> monitorIds{ 0 };
+                std::vector<std::string> monitorLabels{ "Auto (Primary)" };
+                for (int i = 0; i < displayCount; ++i) {
+                    const char* name = SDL_GetDisplayName(displays[i]);
+                    monitorIds.push_back(displays[i]);
+                    monitorLabels.emplace_back(name ? name : "Display");
+                }
+                if (displays) SDL_free(displays);
+                int monitorIdx = 0;
+                for (size_t i = 0; i < monitorIds.size(); ++i)
+                    if (monitorIds[i] == targetDisplay) monitorIdx = static_cast<int>(i);
+                std::vector<const char*> monitorNames;
+                monitorNames.reserve(monitorLabels.size());
+                for (auto& s : monitorLabels) monitorNames.push_back(s.c_str());
+                if (ImGui::Combo("Monitor", &monitorIdx, monitorNames.data(), static_cast<int>(monitorNames.size()))) {
+                    setTargetDisplay(monitorIds[monitorIdx]);
+                }
+
+                ImGui::SliderFloat("Resolution Scale", &resolutionScale, 0.25f, 2.0f, "%.2fx");
+                ImGui::SliderFloat("UI Scale", &uiScale, 0.5f, 3.0f, "%.2fx");
+            }
 
             const char* presentModeNames[] = { "Vsync", "Mailbox", "Immediate" };
             const SDL_GPUPresentMode presentModeValues[] = {
@@ -658,10 +837,20 @@ namespace ytail {
         if (app) app->uiTick();
     }
 
-    void Engine::renderImGui(SDL_GPUCommandBuffer* commandBuffer){
+    void Engine::renderImGui(SDL_GPUCommandBuffer* commandBuffer, Uint32 fbWidth, Uint32 fbHeight){
         // Closes the ImGui frame started in uiTick() and stages the draw list.
         // PrepareDrawData copies vertex/index buffers to GPU memory; this MUST happen
         // outside any render pass (SDL_GPU forbids buffer uploads inside a pass).
+
+        // Pin ImGui's framebuffer to the swapchain we're actually rendering into. On mode changes
+        // (e.g. fullscreen->borderless) the drawable size lags ImGui's window size by a frame;
+        // without this the backend emits a scissor larger than the render pass and Metal aborts.
+        // Adjust FramebufferScale (not DisplaySize) so the point-based UI layout stays correct.
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f) {
+            io.DisplayFramebufferScale = ImVec2(fbWidth / io.DisplaySize.x, fbHeight / io.DisplaySize.y);
+        }
+
         ImGui::Render();
         ImGui_ImplSDLGPU3_PrepareDrawData(ImGui::GetDrawData(), commandBuffer);
     }
