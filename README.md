@@ -62,6 +62,7 @@ yellowtail/
 - https://www.gafferongames.com/post/fix_your_timestep/
 - https://www.opengl-tutorial.org/miscellaneous/clicking-on-objects/picking-with-custom-ray-obb-function/
 - https://webgpufundamentals.org/webgpu/lessons/webgpu-picking.html
+- https://jorenjoestar.github.io/post/serialization_for_games/
 
 ## Shaders (SDL_gpu via SDL_shadercross)
 

@@ -85,6 +85,8 @@ namespace ytail {
         // Build a world-space ray from a window pixel through the active camera. False if no camera.
         [[nodiscard]] bool screenPointToRay(float screenX, float screenY,
                                             glm::vec3& outOrigin, glm::vec3& outDir) const;
+
+        bool showPhysicsShapes = false;
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;
@@ -144,8 +146,6 @@ namespace ytail {
         ImVec4 ambientDebug = ImVec4(1.f, 1.f, 1.f, 1.00f);
         float ambientIntensity = 0.2f;
         bool showDebugWindow = false;
-        bool showPhysicsShapes = false;
-
 };
 
 } // ytail

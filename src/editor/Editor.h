@@ -15,6 +15,7 @@
 namespace ytail
 {
     class Engine;
+    class RigidbodyComponent;
 
     class Editor : public Application {
     public:
@@ -38,8 +39,14 @@ namespace ytail
         // transform gizmo for the current selection
         void drawGizmo();
 
+        // "Entity / Collider N" picker for what the gizmo edits on a rigidbody
+        void drawColliderGizmoTarget(RigidbodyComponent* rb);
+
         // id of the entity shown in the inspector; 0 = none (ids start at 1)
         Uint32 selectedEntity = 0;
+
+        // which collider the gizmo edits on the selection; -1 = the entity transform
+        int selectedCollider = -1;
 
         ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
         ImGuizmo::MODE gizmoMode = ImGuizmo::WORLD;

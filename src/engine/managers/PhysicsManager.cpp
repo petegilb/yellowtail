@@ -17,6 +17,9 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyManager.h>
 
@@ -131,6 +134,17 @@ namespace {
     Quat toJolt(const glm::quat& q)  { return Quat(q.x, q.y, q.z, q.w); }
     glm::vec3 toGlm(RVec3Arg v)      { return { v.GetX(), v.GetY(), v.GetZ() }; }
     glm::quat toGlm(QuatArg q)       { return glm::quat(q.GetW(), q.GetX(), q.GetY(), q.GetZ()); }
+
+    // The bare Jolt shape for one collider, before its local offset is applied.
+    ShapeRefC makeShape(const ytail::physics::ColliderDef& c) {
+        using namespace ytail::physics;
+        switch (c.shape) {
+            case ColliderShape::Sphere:  return new SphereShape(c.radius);
+            case ColliderShape::Capsule: return new CapsuleShape(c.halfHeight, c.radius);
+            case ColliderShape::Box:
+            default:                     return new BoxShape(toJolt(c.halfExtents));
+        }
+    }
 }
 
 namespace ytail::physics {
@@ -195,11 +209,34 @@ namespace ytail::physics {
     }
 
     BodyHandle PhysicsManager::createBody(const BodyDef& def) {
+        if (def.colliders.empty()) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "[Jolt] createBody called with no colliders");
+            return InvalidBody;
+        }
+
         ShapeRefC shape;
-        if (def.shape == ColliderShape::Sphere) {
-            shape = new SphereShape(def.radius);
+        if (def.colliders.size() == 1) {
+            const ColliderDef& c = def.colliders[0];
+            ShapeRefC inner = makeShape(c);
+            const bool centered = c.offset == glm::vec3(0.0f) && c.rotation == glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            shape = centered
+                ? inner
+                : ShapeRefC(new RotatedTranslatedShape(toJolt(c.offset), toJolt(c.rotation), inner));
         } else {
-            shape = new BoxShape(toJolt(def.halfExtents));
+            // Keep the inner shapes alive until Create() copies them into the compound.
+            std::vector<ShapeRefC> inners;
+            inners.reserve(def.colliders.size());
+            StaticCompoundShapeSettings compound;
+            for (const ColliderDef& c : def.colliders) {
+                inners.push_back(makeShape(c));
+                compound.AddShape(toJolt(c.offset), toJolt(c.rotation), inners.back());
+            }
+            ShapeSettings::ShapeResult result = compound.Create();
+            if (result.HasError()) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "[Jolt] compound shape error: %s", result.GetError().c_str());
+                return InvalidBody;
+            }
+            shape = result.Get();
         }
 
         const bool dynamic = def.type == BodyType::Dynamic;

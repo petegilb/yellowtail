@@ -4,6 +4,8 @@
 
 #ifndef YELLOWTAIL_RIGIDBODYCOMPONENT_H
 #define YELLOWTAIL_RIGIDBODYCOMPONENT_H
+#include <vector>
+
 #include "../Component.h"
 #include "../managers/PhysicsManager.h"
 
@@ -18,10 +20,11 @@ namespace ytail {
         void fixedTick(float deltaTime) override;
         void tick(float deltaTime) override;
 
-        physics::ColliderShape shape = physics::ColliderShape::Box;
-        glm::vec3 halfExtents{0.5f};  // box
-        float radius = 0.5f;          // sphere
+        std::vector<physics::ColliderDef> colliders{ {} };
         physics::BodyType type = physics::BodyType::Dynamic;
+
+        // Editor gizmo writes a collider's body-local offset/rotation and flags a rebuild.
+        void setColliderTransform(size_t index, const glm::vec3& offset, const glm::quat& rotation);
 
         [[nodiscard]] const char* getTypeName() const override { return "Rigidbody"; }
         void drawInspector() override;

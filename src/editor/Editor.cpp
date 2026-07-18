@@ -43,6 +43,7 @@ namespace ytail
         SDL_Log("Editor started!");
 
         engine->setPlayState(PlayState::Paused);
+        engine->showPhysicsShapes = true;
         // TODO make the scene reset when turning off simulating (it should load from our scene file once that exists)
 
         ResourceManager* resourceManager = engine->getResourceManager();
@@ -114,8 +115,7 @@ namespace ytail
         floorRender->addMaterial(floorMaterial);
         auto floorCollider = floor->addComponent<RigidbodyComponent>();
         floorCollider->type = physics::BodyType::Static;
-        floorCollider->shape = physics::ColliderShape::Box;
-        floorCollider->halfExtents = glm::vec3(10.0f, 0.1f, 10.0f);
+        floorCollider->colliders = { { .shape = physics::ColliderShape::Box, .halfExtents = glm::vec3(10.0f, 0.1f, 10.0f) } };
 
         // physics: a sphere that falls onto the floor
         Entity* sphere = engine->addEntity();
@@ -123,8 +123,7 @@ namespace ytail
         sphereTransform->position = glm::vec3(0.0f, 5.0f, 0.0f);
         auto sphereBody = sphere->addComponent<RigidbodyComponent>();
         sphereBody->type = physics::BodyType::Dynamic;
-        sphereBody->shape = physics::ColliderShape::Sphere;
-        sphereBody->radius = 1.0f;
+        sphereBody->colliders = { { .shape = physics::ColliderShape::Sphere, .radius = 1.0f } };
         
         // sphere material
         auto sphereMaterial = std::make_shared<Material>();
@@ -217,6 +216,7 @@ namespace ytail
         }
 
         selectedEntity = id;
+        selectedCollider = -1;
 
         if (Entity* current = engine->getEntity(selectedEntity)){
             if (auto* renderComp = current->getComponent<RenderComponent>()){
@@ -234,10 +234,41 @@ namespace ytail
         glm::mat4 view, projection;
         if (!engine->getCameraMatrices(view, projection)) return;
 
+        auto* rigidbody = entity->getComponent<RigidbodyComponent>();
+        const bool editingCollider = selectedCollider >= 0 && rigidbody != nullptr
+                                     && selectedCollider < static_cast<int>(rigidbody->colliders.size());
+
+        // Colliders carry no scale, so fall back to translate if scale is the active op.
+        if (editingCollider && gizmoOperation == ImGuizmo::SCALE) gizmoOperation = ImGuizmo::TRANSLATE;
+
         float snapValue = snapTranslate;
         if (gizmoOperation == ImGuizmo::ROTATE) snapValue = snapRotateDegrees;
         else if (gizmoOperation == ImGuizmo::SCALE) snapValue = snapScale;
         const float snap[3] = { snapValue, snapValue, snapValue };
+
+        if (editingCollider) {
+            // Jolt places the body unscaled at the transform's position+rotation, so the collider
+            // offset lives in that frame (entity scale is deliberately left out).
+            const glm::mat4 bodyMatrix = glm::translate(glm::mat4(1.0f), transform->position)
+                                       * glm::mat4_cast(transform->rotation);
+            const physics::ColliderDef& c = rigidbody->colliders[selectedCollider];
+            glm::mat4 model = bodyMatrix
+                            * glm::translate(glm::mat4(1.0f), c.offset)
+                            * glm::mat4_cast(c.rotation);
+
+            if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(projection),
+                                     gizmoOperation, gizmoMode, glm::value_ptr(model),
+                                     nullptr, gizmoSnap ? snap : nullptr)) {
+                const glm::mat4 local = glm::inverse(bodyMatrix) * model;
+                glm::vec3 scale, translation, skew;
+                glm::quat rotation;
+                glm::vec4 perspective;
+                if (glm::decompose(local, scale, rotation, translation, skew, perspective)) {
+                    rigidbody->setColliderTransform(selectedCollider, translation, rotation);
+                }
+            }
+            return;
+        }
 
         glm::mat4 model = transform->modelMatrix();
         if (!ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(projection),
@@ -254,6 +285,24 @@ namespace ytail
             transform->position = translation;
             transform->rotation = rotation;
             transform->scale = scale;
+        }
+    }
+
+    void Editor::drawColliderGizmoTarget(RigidbodyComponent* rigidbody){
+        const int count = static_cast<int>(rigidbody->colliders.size());
+        if (selectedCollider >= count) selectedCollider = -1;
+
+        ImGui::SeparatorText("Gizmo Target");
+        const std::string current = selectedCollider < 0
+            ? std::string("Entity")
+            : "Collider " + std::to_string(selectedCollider);
+        if (ImGui::BeginCombo("##gizmoTarget", current.c_str())) {
+            if (ImGui::Selectable("Entity", selectedCollider < 0)) selectedCollider = -1;
+            for (int i = 0; i < count; ++i) {
+                const std::string label = "Collider " + std::to_string(i);
+                if (ImGui::Selectable(label.c_str(), selectedCollider == i)) selectedCollider = i;
+            }
+            ImGui::EndCombo();
         }
     }
 
@@ -323,6 +372,8 @@ namespace ytail
                 ImGui::DragFloat("##snap", &snapTranslate, 0.1f, 0.01f, 100.0f, "%.2f");
             }
         }
+        ImGui::SameLine(0.0f, 20.0f);
+        ImGui::Checkbox("Show Physics Shapes", &engine->showPhysicsShapes);
         ImGui::End();
 
         // Outliner: every entity, sorted by id for a stable order, click to select
@@ -354,6 +405,9 @@ namespace ytail
                 ImGui::PushID(component.get());
                 if (ImGui::CollapsingHeader(component->getTypeName(), ImGuiTreeNodeFlags_DefaultOpen)) {
                     component->drawInspector();
+                    if (auto* rigidbody = dynamic_cast<RigidbodyComponent*>(component.get())) {
+                        drawColliderGizmoTarget(rigidbody);
+                    }
                 }
                 ImGui::PopID();
             }

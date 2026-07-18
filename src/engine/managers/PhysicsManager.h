@@ -16,17 +16,26 @@
 
 namespace ytail::physics {
     enum class BodyType : uint8_t { Static, Dynamic };
-    enum class ColliderShape : uint8_t { Box, Sphere };
+    enum class ColliderShape : uint8_t { Box, Sphere, Capsule };
 
     // Opaque handle to a Jolt body (its BodyID as a raw int, so callers never see Jolt).
     using BodyHandle = uint32_t;
     static constexpr BodyHandle InvalidBody = 0xFFFFFFFFu;  // matches JPH::BodyID::cInvalidBodyID
 
-    struct BodyDef {
+    // One collision shape plus its body-local transform. A body's shape is a list of these:
+    // one = a plain (or offset) shape, several = a compound.
+    struct ColliderDef {
         ColliderShape shape = ColliderShape::Box;
         glm::vec3 halfExtents{0.5f};  // box
-        float radius = 0.5f;          // sphere
-        glm::vec3 position{0.0f};
+        float radius = 0.5f;          // sphere, capsule
+        float halfHeight = 0.5f;      // capsule (half-height of the cylindrical middle)
+        glm::vec3 offset{0.0f};       // local to the body
+        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+    };
+
+    struct BodyDef {
+        std::vector<ColliderDef> colliders;
+        glm::vec3 position{0.0f};      // body world pose
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
         BodyType type = BodyType::Dynamic;
     };
