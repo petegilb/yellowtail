@@ -506,21 +506,30 @@ namespace ytail {
         // Stencil reference used by both the LitStaticStencil stamp and the Outline test.
         SDL_SetGPUStencilReference(renderPass, 1);
 
-        // Per-frame lighting: camera position + scene ambient + the first light in the scene.
+        // Per-frame lighting: camera position + scene ambient + up to MaxLights scene lights.
         // Pushed once to fragment slot 0 (FrameLighting @ b0 space3). This state persists for
-        // every draw in this command buffer, so all lit materials read the same light.
+        // every draw in this command buffer, so all lit materials read the same light set.
         FrameLightingUniform frameLighting{};
         frameLighting.viewPos = camXform->position;
         frameLighting.ambient = ambientLight;
+        int lightCount = 0;
         for (const auto& [lightIdx, lightEntity] : entities) {
+            if (lightCount >= FrameLightingUniform::MaxLights) break;
             if (lightEntity == nullptr) continue;
             const auto* lightComp = lightEntity->getComponent<LightComponent>();
             const auto* lightXform = lightEntity->getComponent<TransformComponent>();
             if (lightComp == nullptr || lightXform == nullptr) continue;
-            frameLighting.lightPos   = lightXform->position;
-            frameLighting.lightColor = lightComp->color * lightComp->intensity;
-            break;  // single light for now
+
+            GpuLight& gpuLight = frameLighting.lights[lightCount];
+            gpuLight.position    = lightXform->position;
+            // Forward (-Z) rotated into world space: the direction a directional light travels.
+            gpuLight.direction   = glm::normalize(lightXform->rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+            gpuLight.color       = lightComp->color * lightComp->intensity;
+            gpuLight.attenuation = lightComp->attenuation;
+            gpuLight.type        = static_cast<int>(lightComp->type);
+            lightCount++;
         }
+        frameLighting.lightCount = lightCount;
         SDL_PushGPUFragmentUniformData(commandBuffer, 0, &frameLighting, sizeof(frameLighting));
 
         // for each render component and transform component, get the mesh and the material in order to render it
