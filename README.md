@@ -96,3 +96,7 @@ A few non-obvious decisions in `CMakeLists.txt`:
 - **`/arch:AVX2`** on MSVC - assumes a reasonably modern CPU. Drop this if you need to target older hardware.
 - **`add_custom_command(... POST_BUILD copy_directory assets ...)`** - runs every build, into `$<TARGET_FILE_DIR:${target}>` which resolves per-configuration. Applied to each executable via the `yt_configure_app()` helper, so e.g. `cmake-build-debug/ytail_game/assets/` and `cmake-build-release/ytail_game/assets/` (and the `ytail_editor` equivalents) stay in sync automatically.
 - **`file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`** in `src/CMakeLists.txt` - the `CONFIGURE_DEPENDS` flag makes CMake re-run globbing on every build, so new files appear without manually re-running `cmake -S . -B build`. Slight build-time cost; worth it for ergonomics.
+
+## Attribution
+- font awesome lightbulb CC 4.0: https://fontawesome.com/icons/classic/solid/lightbulb
+- font awesome camera CC 4.0: https://fontawesome.com/icons/classic/solid/camera
