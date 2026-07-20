@@ -31,19 +31,21 @@ public:
             return glm::degrees(glm::eulerAngles(rotation));
         }
 
-        // Local-to-world transform: T * R * S. Feeds the MVP for rendering, and its
-        // inverse is the view matrix when this transform belongs to a camera.
-        [[nodiscard]] glm::mat4 modelMatrix() const {
+        // T * R * S in the entity's own space (relative to its parent).
+        [[nodiscard]] glm::mat4 localMatrix() const {
             return glm::translate(glm::mat4(1.0f), position)
                  * glm::mat4_cast(rotation)
                  * glm::scale(glm::mat4(1.0f), scale);
         }
 
-        // Transform for normals: transpose(inverse(model)). Needed so non-uniform scale
+        // localMatrix folded through every ancestor. Equals localMatrix when unparented.
+        [[nodiscard]] glm::mat4 worldMatrix() const;
+
+        // Transform for normals: transpose(inverse(world)). Needed so non-uniform scale
         // doesn't skew normals. Returned as mat4 to match the cbuffer; the shader casts
         // it to float3x3.
         [[nodiscard]] glm::mat4 normalMatrix() const {
-            return glm::transpose(glm::inverse(modelMatrix()));
+            return glm::transpose(glm::inverse(worldMatrix()));
         }
 
         static constexpr const char* SerialId = "transform";

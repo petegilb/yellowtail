@@ -6,10 +6,22 @@
 
 #include "imgui.h"
 
+#include "../Entity.h"
 #include "../serialize/Archive.h"
 #include "../serialize/GlmJson.h"
 
 namespace ytail {
+    glm::mat4 TransformComponent::worldMatrix() const {
+        if (owner) {
+            if (Entity* parent = owner->getParent()) {
+                if (auto* parentTransform = parent->getComponent<TransformComponent>()) {
+                    return parentTransform->worldMatrix() * localMatrix();
+                }
+            }
+        }
+        return localMatrix();
+    }
+
     void TransformComponent::serialize(Archive& ar) {
         ar("position", position);
         ar("rotation", rotation);

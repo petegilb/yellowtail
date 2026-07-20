@@ -92,6 +92,13 @@ namespace ytail {
         void clearScene();
         Entity* getEntity(Uint32 id);
 
+        // Parent childId under parentId, keeping both link sides in sync. parentId == 0 detaches
+        // to root. Returns false (no-op) on unknown ids, self-parenting, or a cycle.
+        bool reparent(Uint32 childId, Uint32 parentId);
+
+        // Remove an entity and its whole subtree (all descendants go with it).
+        void removeEntity(Uint32 id);
+
         // All entities, for the editor outliner. Lookups by id still go through getEntity().
         [[nodiscard]] const std::unordered_map<Uint32, std::unique_ptr<Entity>>& getEntities() const { return entities; }
 

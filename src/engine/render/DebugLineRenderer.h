@@ -23,9 +23,11 @@ namespace ytail {
         // stage this frame's lines into the GPU buffer; runs a copy pass so call before BeginRenderPass
         void upload(SDL_GPUCommandBuffer* commandBuffer, const std::vector<JoltDebugVertex>& lines);
 
-        // draw the uploaded lines; call inside a render pass that has the depth target bound
+        // draw the uploaded lines; call inside a render pass that has the depth target bound.
+        // fragmentUniform (when set) is pushed to fragment slot 0 - the grid uses it for its fade.
         void draw(SDL_GPURenderPass* renderPass, SDL_GPUCommandBuffer* commandBuffer,
-                  SDL_GPUGraphicsPipeline* pipeline, const glm::mat4& viewProj);
+                  SDL_GPUGraphicsPipeline* pipeline, const glm::mat4& viewProj,
+                  const void* fragmentUniform = nullptr, Uint32 fragmentUniformSize = 0);
 
     private:
         // grow the vertex + transfer buffers if the current frame needs more room

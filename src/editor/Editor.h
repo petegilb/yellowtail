@@ -15,11 +15,30 @@
 #include "imguizmo/ImGuizmo.h"
 
 #include "engine/Application.h"
+#include "engine/render/Material.h"
 
 namespace ytail
 {
     class Engine;
+    class Entity;
     class RigidbodyComponent;
+    class RenderComponent;
+
+    // One texture entry while authoring a material: either a solid color or a file path.
+    struct MaterialTextureDef {
+        bool solid = true;
+        glm::vec4 color{1.0f};
+        std::string path;
+        bool srgb = false;
+        SamplerType sampler = SamplerType::LinearWrap;
+    };
+
+    // Editor-side authoring model for a .mat file (the file is the source of truth).
+    struct MaterialDef {
+        PipelineType pipeline = PipelineType::LitStatic;
+        std::vector<MaterialTextureDef> textures;
+        MaterialUniform uniform;
+    };
 
     class Editor : public Application {
     public:
@@ -51,6 +70,21 @@ namespace ytail
         // change selection in the editor (changes outline too)
         void setSelected(Uint32 id);
 
+        // one entity row in the outliner tree, recursing into its children
+        void drawOutlinerNode(Entity* entity);
+
+        // inspector combo to set the selected entity's parent
+        void drawParentSelector(Entity* entity);
+
+        // mesh + material slot pickers shown under a RenderComponent in the inspector
+        void drawRenderComponentAssets(RenderComponent* render);
+
+        // floating window to author and save .mat files
+        void drawMaterialEditor();
+        // write / read materialDef to the .mat file at materialPath
+        void saveMaterialDef();
+        void loadMaterialDef();
+
         // transform gizmo for the current selection
         void drawGizmo();
 
@@ -71,6 +105,11 @@ namespace ytail
         float snapTranslate = 1.0f;
         float snapRotateDegrees = 15.0f;
         float snapScale = 0.1f;
+
+        // Material editor window state
+        bool showMaterialEditor = false;
+        MaterialDef materialDef;
+        std::string materialPath = "materials/new.mat";
     };
 } // ytail
 

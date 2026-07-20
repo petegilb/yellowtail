@@ -85,6 +85,7 @@ add_library(imgui STATIC
         ${imgui_SOURCE_DIR}/imgui_draw.cpp
         ${imgui_SOURCE_DIR}/imgui_tables.cpp
         ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
         ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
         ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp
 )
@@ -167,6 +168,20 @@ FetchContent_MakeAvailable(JoltPhysics)
 
 set(CMAKE_CXX_FLAGS "${_yt_saved_cxx_flags}")
 unset(_yt_saved_cxx_flags)
+
+# --- Tracy (frame profiler; client is compiled into the engine) ---
+# Opt-in: configure with -DYELLOWTAIL_PROFILE=ON (or flip the cache option in CLion) to
+# instrument. When OFF, TracyClient compiles to nothing and every Tracy macro no-ops.
+# On-demand means data is only collected while the Tracy GUI is connected.
+option(YELLOWTAIL_PROFILE "Enable Tracy profiler instrumentation" OFF)
+set(TRACY_ENABLE    ${YELLOWTAIL_PROFILE} CACHE BOOL "" FORCE)
+set(TRACY_ON_DEMAND ON                    CACHE BOOL "" FORCE)
+FetchContent_Declare(tracy
+        GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+        GIT_TAG v0.13.1
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(tracy)
 
 # --- Targets ---
 # The engine static library plus the ytail_game / ytail_editor executables that link it,

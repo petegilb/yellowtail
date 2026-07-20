@@ -21,6 +21,7 @@ namespace ytail {
         { PipelineType::UnlitStatic,      "UnlitStatic" },
         { PipelineType::Outline,          "Outline" },
         { PipelineType::DebugLine,        "DebugLine" },
+        { PipelineType::Grid,             "Grid" },
     })
 
     NLOHMANN_JSON_SERIALIZE_ENUM(SamplerType, {

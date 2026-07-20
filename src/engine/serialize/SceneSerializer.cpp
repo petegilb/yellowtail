@@ -32,6 +32,9 @@ namespace ytail {
             nlohmann::json entityJson;
             entityJson["id"] = id;
             entityJson["name"] = entity->getName();
+            if (entity->getParent() != nullptr) {
+                entityJson["parent"] = entity->getParent()->getId();
+            }
 
             nlohmann::json componentsJson = nlohmann::json::array();
             for (const auto& component : entity->getComponents()) {
@@ -56,10 +59,19 @@ namespace ytail {
         engine.setAmbientIntensity(root.value("ambientIntensity", 1.0f));
 
         if (!root.contains("entities")) return;
+
+        // Parent links are resolved in a second pass so a child can reference a parent that
+        // hasn't been created yet when we reach the child.
+        std::vector<std::pair<Uint32, Uint32>> pendingParents;
+
         for (const auto& entityJson : root.at("entities")) {
             const Uint32 id = entityJson.at("id").get<Uint32>();
             Entity* entity = engine.addEntityWithId(id);
             entity->setName(entityJson.value("name", std::string()));
+
+            if (entityJson.contains("parent")) {
+                pendingParents.emplace_back(id, entityJson.at("parent").get<Uint32>());
+            }
 
             if (!entityJson.contains("components")) continue;
             for (const auto& compJson : entityJson.at("components")) {
@@ -72,6 +84,10 @@ namespace ytail {
                 Component* attached = entity->addComponent(std::move(component));
                 attached->serialize(ar);
             }
+        }
+
+        for (const auto& [childId, parentId] : pendingParents) {
+            engine.reparent(childId, parentId);
         }
     }
 

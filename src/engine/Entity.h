@@ -24,6 +24,9 @@ public:
         [[nodiscard]] const std::string& getName() const { return name; }
         void setName(const std::string& newName) { name = newName; }
 
+        [[nodiscard]] Entity* getParent() const { return parent; }
+        [[nodiscard]] const std::vector<Entity*>& getChildren() const { return children; }
+
         // False keeps this entity out of saved scenes
         [[nodiscard]] bool isSerializable() const { return serializable; }
         void setSerializable(bool value) { serializable = value; }
@@ -61,6 +64,17 @@ public:
             return ptr;
         }
 
+        // Detach and destroy a component previously returned by getComponents(). No-op if it
+        // isn't attached to this entity.
+        void removeComponent(Component* component) {
+            for (auto it = components.begin(); it != components.end(); ++it) {
+                if (it->get() == component) {
+                    components.erase(it);
+                    return;
+                }
+            }
+        }
+
         // First attached component of type T, or nullptr if the entity has none.
         template<typename T>
         T* getComponent() const {
@@ -78,6 +92,10 @@ public:
         }
 
 private:
+        friend class Engine;
+        Entity* parent = nullptr;
+        std::vector<Entity*> children;
+
         Uint32 entityId;
         std::string name;
         bool serializable = true;

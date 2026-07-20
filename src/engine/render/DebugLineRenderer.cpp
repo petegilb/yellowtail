@@ -57,11 +57,15 @@ namespace ytail {
     }
 
     void DebugLineRenderer::draw(SDL_GPURenderPass* renderPass, SDL_GPUCommandBuffer* commandBuffer,
-                                 SDL_GPUGraphicsPipeline* pipeline, const glm::mat4& viewProj) {
+                                 SDL_GPUGraphicsPipeline* pipeline, const glm::mat4& viewProj,
+                                 const void* fragmentUniform, Uint32 fragmentUniformSize) {
         if (vertexCount == 0 || pipeline == nullptr) return;
 
         SDL_BindGPUGraphicsPipeline(renderPass, pipeline);
         SDL_PushGPUVertexUniformData(commandBuffer, 0, &viewProj, sizeof(glm::mat4));
+        if (fragmentUniform != nullptr && fragmentUniformSize > 0) {
+            SDL_PushGPUFragmentUniformData(commandBuffer, 0, fragmentUniform, fragmentUniformSize);
+        }
 
         SDL_GPUBufferBinding binding = { .buffer = vertexBuffer, .offset = 0 };
         SDL_BindGPUVertexBuffers(renderPass, 0, &binding, 1);

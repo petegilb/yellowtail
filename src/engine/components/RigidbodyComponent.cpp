@@ -52,6 +52,8 @@ namespace ytail {
         if (!ensureBody()) return;
 
         // Dynamic bodies are authoritative: write the simulated pose back onto the entity.
+        // The sim works in world space and this writes into the local position/rotation, so a
+        // dynamic body is expected to be a root entity. Parenting one is unsupported (sim wins).
         if (type == BodyType::Dynamic) {
             PhysicsManager::get().getBodyTransform(body, transformComp->position, transformComp->rotation);
         }

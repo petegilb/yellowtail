@@ -40,10 +40,6 @@ namespace ytail {
             }
             ar("materials", materialPaths);
         }
-
-        ar("outline", outline);
-        ar("outlineColor", outlineColor);
-        ar("outlineScale", outlineScale);
     }
 
     void RenderComponent::setMesh(std::shared_ptr<Mesh> inMesh) {

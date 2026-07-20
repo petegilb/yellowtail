@@ -37,6 +37,8 @@ public:
         std::shared_ptr<Mesh> getMesh(const std::string& path);
         // get or load the material from a .mat file. Loads its textures (file or solid color) and samplers.
         std::shared_ptr<Material> getMaterial(const std::string& path);
+        // Drop the cached material and reload it from disk.
+        std::shared_ptr<Material> reloadMaterial(const std::string& path);
         // get the pipeline based on the pipeline type. When outline is true, lit pipelines are
         // swapped for their stencil-stamping variant so the outline pass has a silhouette to mask.
         SDL_GPUGraphicsPipeline* getPipeline(PipelineType type, bool outline = false);

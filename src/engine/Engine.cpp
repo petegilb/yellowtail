@@ -7,9 +7,12 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Profiling.h"
+
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlgpu3.h"
+#include <SDL3_image/SDL_image.h>
 
 #include "Application.h"
 #include "Input.h"
@@ -104,6 +107,13 @@ namespace ytail {
         gridLineRenderer = std::make_unique<DebugLineRenderer>(device);
         initializeImGui();
 
+        // set app icon
+        SDL_Surface* imageData = IMG_Load(resourceManager->resolveAssetPath("textures/icons/appicon.png").c_str());
+        if (imageData == nullptr){
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not app icon! %s", SDL_GetError());
+        }
+        SDL_SetWindowIcon(window, imageData);
+
         // The app (game or editor) builds its scene now that the engine + resources are ready.
         if (app) app->start();
 
@@ -144,6 +154,8 @@ namespace ytail {
                 SDL_SetWindowTitle(window, title);
                 fps = 0;
             }
+
+            FrameMark;  // Tracy frame boundary
         }
     }
 
@@ -152,6 +164,7 @@ namespace ytail {
     }
 
     void Engine::tick(float deltaTime) {
+        ZoneScoped;
         eventTick();
 
         // see https://www.gafferongames.com/post/fix_your_timestep/
@@ -183,8 +196,12 @@ namespace ytail {
     }
 
     void Engine::fixedTick(float deltaTime) {
+        ZoneScoped;
         // engine (physics), then app, then components.
-        physics::PhysicsManager::get().step(deltaTime);
+        {
+            ZoneScopedN("Physics step");
+            physics::PhysicsManager::get().step(deltaTime);
+        }
         if (app) app->fixedTick(deltaTime);
         for (const auto& [id, entity] : entities) {
             if (entity) entity->fixedTick(deltaTime);
@@ -193,6 +210,7 @@ namespace ytail {
     }
 
     void Engine::eventTick() {
+        ZoneScoped;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
@@ -221,6 +239,7 @@ namespace ytail {
     }
 
     void Engine::updateTick() {
+        ZoneScoped;
         // Hand the cursor to the UI whenever a menu/overlay is up so gameplay input yields to it.
         Input::get().setUiActive(showDebugWindow);
         ambientLight = {ambientDebug.x, ambientDebug.y, ambientDebug.z};
@@ -357,15 +376,21 @@ namespace ytail {
         setWindowMode(windowMode);
     }
 
+    // Grid fade parameters for the grid fragment shader (must match GridLine.frag's GridFade cbuffer).
+    struct GridFadeUniform {
+        glm::vec2 center;
+        float halfRadius;
+        float opacity;
+    };
+
     // World-unit reference grid on the XZ plane (y=0). It follows the camera (snapped to cell
-    // boundaries so world units stay aligned and the origin lands on an intersection) and fades
-    // toward its rim so a finite ring of lines reads as an infinite grid. The lines through world
-    // x==0 / z==0 are tinted as the axes (X red, Z blue). Lines are split per cell so the radial
-    // fade can be evaluated per vertex.
+    // boundaries so world units stay aligned and the origin lands on an intersection). Each line is
+    // one full-length segment; the grid fragment shader fades it radially around the camera so a
+    // finite ring reads as an infinite grid. Lines through world x==0 / z==0 are tinted as the axes.
     static void buildGridLines(std::vector<JoltDebugVertex>& out, float spacing, int extent,
-                               const glm::vec3& camera, float opacity) {
+                               const glm::vec3& camera) {
         out.clear();
-        if (spacing <= 0.0f || extent <= 0 || opacity <= 0.0f) return;
+        if (spacing <= 0.0f || extent <= 0) return;
 
         const float cx = std::floor(camera.x / spacing) * spacing;
         const float cz = std::floor(camera.z / spacing) * spacing;
@@ -375,36 +400,22 @@ namespace ytail {
         const glm::vec3 xAxis{0.85f, 0.25f, 0.25f};
         const glm::vec3 zAxis{0.3f, 0.5f, 0.9f};
 
-        // Full opacity out to half the radius, then ease to zero at the rim.
-        const auto alphaAt = [&](float x, float z) {
-            const float dx = x - cx, dz = z - cz;
-            const float d = std::sqrt(dx * dx + dz * dz);
-            const float t = glm::clamp((d - 0.5f * half) / (0.5f * half), 0.0f, 1.0f);
-            return opacity * (1.0f - t * t);
-        };
-        const auto push = [&](float x, float z, const glm::vec3& base) {
-            out.push_back({ {x, 0.0f, z}, glm::vec4(base, alphaAt(x, z)) });
-        };
-
         for (int i = -extent; i <= extent; ++i) {
             const float x = cx + i * spacing;
             const glm::vec3& color = std::abs(x) < 0.5f * spacing ? zAxis : gray;  // world x==0 -> Z axis
-            for (int s = -extent; s < extent; ++s) {
-                push(x, cz + s * spacing, color);
-                push(x, cz + (s + 1) * spacing, color);
-            }
+            out.push_back({ {x, 0.0f, cz - half}, glm::vec4(color, 1.0f) });
+            out.push_back({ {x, 0.0f, cz + half}, glm::vec4(color, 1.0f) });
         }
         for (int i = -extent; i <= extent; ++i) {
             const float z = cz + i * spacing;
             const glm::vec3& color = std::abs(z) < 0.5f * spacing ? xAxis : gray;  // world z==0 -> X axis
-            for (int s = -extent; s < extent; ++s) {
-                push(cx + s * spacing, z, color);
-                push(cx + (s + 1) * spacing, z, color);
-            }
+            out.push_back({ {cx - half, 0.0f, z}, glm::vec4(color, 1.0f) });
+            out.push_back({ {cx + half, 0.0f, z}, glm::vec4(color, 1.0f) });
         }
     }
 
     int Engine::renderTick(float alpha) {
+        ZoneScoped;
         drawCallsLastFrame = 0;
 
         // just found this reference: https://dawaralvi.github.io/sdl-gpu/
@@ -472,7 +483,7 @@ namespace ytail {
         // Editor grid: rebuild + stage its world-space lines (same before-pass copy rule).
         if (showGrid && gridLineRenderer) {
             std::vector<JoltDebugVertex> gridLines;
-            buildGridLines(gridLines, gridSpacing, gridExtent, camXform->position, gridOpacity);
+            buildGridLines(gridLines, gridSpacing, gridExtent, camXform->position);
             gridLineRenderer->upload(commandBuffer, gridLines);
         }
 
@@ -529,7 +540,7 @@ namespace ytail {
             SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
             SDL_BindGPUIndexBuffer(renderPass, &indexBinding, mesh->indexSize);
             // transform uniform (uses the camera input from the top of this function)
-            const glm::mat4 model = transformComponent->modelMatrix();
+            const glm::mat4 model = transformComponent->worldMatrix();
             VertexUniform vsu{
                 projection * view * model,
                 model,
@@ -609,7 +620,7 @@ namespace ytail {
                 SDL_BindGPUIndexBuffer(renderPass, &indexBinding, mesh->indexSize);
 
                 // Scale the model about its local origin so the shell pokes out past the mesh.
-                const glm::mat4 model = transformComponent->modelMatrix()
+                const glm::mat4 model = transformComponent->worldMatrix()
                     * glm::scale(glm::mat4(1.0f), glm::vec3(renderComponent->outlineScale));
                 VertexUniform vsu{ projection * view * model, model, glm::mat4(1.0f) };
                 SDL_PushGPUVertexUniformData(commandBuffer, 0, &vsu, sizeof(vsu));
@@ -625,10 +636,19 @@ namespace ytail {
             }
         }
 
-        // Editor grid, under the scene geometry (drawn first, depth-tested).
+        // Editor grid, under the scene geometry (drawn first, depth-tested). The fragment shader
+        // fades each line radially around the camera using this uniform.
         if (showGrid && gridLineRenderer) {
+            const float snappedX = std::floor(camXform->position.x / gridSpacing) * gridSpacing;
+            const float snappedZ = std::floor(camXform->position.z / gridSpacing) * gridSpacing;
+            GridFadeUniform gridFade{
+                { snappedX, snappedZ },
+                gridExtent * gridSpacing,
+                gridOpacity
+            };
             gridLineRenderer->draw(renderPass, commandBuffer,
-                resourceManager->getPipeline(PipelineType::DebugLine), projection * view);
+                resourceManager->getPipeline(PipelineType::Grid), projection * view,
+                &gridFade, sizeof(gridFade));
         }
 
         // Physics debug wireframe on top of the scene (world-space verts, depth-tested, no write).
@@ -695,6 +715,59 @@ namespace ytail {
         return entities[id].get();
     }
 
+    bool Engine::reparent(const Uint32 childId, const Uint32 parentId) {
+        Entity* child = getEntity(childId);
+        if (child == nullptr) return false;
+
+        Entity* newParent = nullptr;
+        if (parentId != 0) {
+            if (childId == parentId) return false;
+            newParent = getEntity(parentId);
+            if (newParent == nullptr) return false;
+            // Walk up from the prospective parent; if we reach child, this would form a cycle.
+            for (Entity* ancestor = newParent; ancestor != nullptr; ancestor = ancestor->parent) {
+                if (ancestor == child) return false;
+            }
+        }
+
+        if (child->parent != nullptr) {
+            auto& siblings = child->parent->children;
+            for (auto it = siblings.begin(); it != siblings.end(); ++it) {
+                if (*it == child) { siblings.erase(it); break; }
+            }
+        }
+
+        child->parent = newParent;
+        if (newParent != nullptr) newParent->children.push_back(child);
+        return true;
+    }
+
+    void Engine::removeEntity(const Uint32 id) {
+        Entity* entity = getEntity(id);
+        if (entity == nullptr) return;
+
+        if (entity->parent != nullptr) {
+            auto& siblings = entity->parent->children;
+            for (auto it = siblings.begin(); it != siblings.end(); ++it) {
+                if (*it == entity) { siblings.erase(it); break; }
+            }
+            entity->parent = nullptr;
+        }
+
+        // Gather the subtree (this id plus every descendant) before erasing anything.
+        std::vector<Uint32> toRemove{ id };
+        for (size_t i = 0; i < toRemove.size(); ++i) {
+            Entity* current = getEntity(toRemove[i]);
+            if (current == nullptr) continue;
+            for (Entity* child : current->children) toRemove.push_back(child->getId());
+        }
+
+        for (const Uint32 removeId : toRemove) {
+            if (activeCamera == getEntity(removeId)) activeCamera = nullptr;
+            entities.erase(removeId);
+        }
+    }
+
     void Engine::setActiveCamera(Uint32 id) {
         if (!entities.contains(id)) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "setActiveCamera tried to set to a null entity! %d", id);
@@ -713,7 +786,7 @@ namespace ytail {
         SDL_GetWindowSize(window, &w, &h);
         if (w == 0 || h == 0) return false;
 
-        outView = glm::inverse(camTransform->modelMatrix());
+        outView = glm::inverse(camTransform->worldMatrix());
         outProjection = camComp->projectionMatrix(static_cast<float>(w) / static_cast<float>(h));
         return true;
     }
@@ -801,6 +874,7 @@ namespace ytail {
     }
 
     void Engine::uiTick(){
+        ZoneScoped;
         // reference: https://github.com/ocornut/imgui/blob/master/examples/example_sdl3_sdlgpu3/main.cpp
         // Start the Dear ImGui frame
         ImGui_ImplSDLGPU3_NewFrame();
@@ -916,6 +990,7 @@ namespace ytail {
     }
 
     void Engine::renderImGui(SDL_GPUCommandBuffer* commandBuffer, Uint32 fbWidth, Uint32 fbHeight){
+        ZoneScoped;
         // Closes the ImGui frame started in uiTick() and stages the draw list.
         // PrepareDrawData copies vertex/index buffers to GPU memory; this MUST happen
         // outside any render pass (SDL_GPU forbids buffer uploads inside a pass).

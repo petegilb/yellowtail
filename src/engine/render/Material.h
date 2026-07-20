@@ -22,6 +22,7 @@ namespace ytail {
         UnlitStatic,
         Outline,
         DebugLine,
+        Grid,
         Count
     };
 
