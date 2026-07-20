@@ -6,7 +6,16 @@
 
 #include "imgui.h"
 
+#include "../serialize/Archive.h"
+#include "../serialize/GlmJson.h"
+
 namespace ytail {
+    void TransformComponent::serialize(Archive& ar) {
+        ar("position", position);
+        ar("rotation", rotation);
+        ar("scale", scale);
+    }
+
     void TransformComponent::drawInspector() {
         ImGui::DragFloat3("Position", &position.x, 0.1f);
 

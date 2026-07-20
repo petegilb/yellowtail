@@ -28,6 +28,9 @@
 #include "engine/components/RigidbodyComponent.h"
 #include "engine/render/Mesh.h"
 #include "engine/managers/ResourceManager.h"
+#include "engine/serialize/SceneSerializer.h"
+
+#include <nlohmann/json.hpp>
 
 namespace ytail
 {
@@ -44,96 +47,44 @@ namespace ytail
 
         engine->setPlayState(PlayState::Paused);
         engine->showPhysicsShapes = true;
-        // TODO make the scene reset when turning off simulating (it should load from our scene file once that exists)
 
-        ResourceManager* resourceManager = engine->getResourceManager();
+        loadScene(*engine, "scenes/main.scene.json");
+        createEditorCamera();
+    }
 
-        // scene setup
+    void Editor::createEditorCamera(){
         Entity* camera = engine->addEntity();
         camera->setName("FlyCam");
+        // editor-only, never written into a scene
+        camera->setSerializable(false);
+
         const auto camTransform = camera->addComponent<TransformComponent>();
         camera->addComponent<CameraComponent>();
-        engine->setActiveCamera(camera->getId());
-        camTransform->position = glm::vec3(0.0f, 3.0f, 5.0f);   // back up 5 units, looking down -Z toward origin
-        camTransform->setRotationEuler(glm::vec3(-30.0f, 0.0f, 0.0f));
         camera->addComponent<FreeMovementComponent>();
+        camTransform->position = glm::vec3(0.0f, 3.0f, 5.0f);   // back up, looking down -Z toward origin
+        camTransform->setRotationEuler(glm::vec3(-30.0f, 0.0f, 0.0f));
 
-        Entity* light0 = engine->addEntity();
-        light0->setName("Light1");
-        const auto lightTransform = light0->addComponent<TransformComponent>();
-        const auto lightComponent = light0->addComponent<LightComponent>();
-        lightComponent->color = glm::vec3(1.0f, 1.0f, 1.0f);
-        lightComponent->intensity = 1.0f;
-        lightTransform->position = glm::vec3(1.2f, 1.0f, 2.0f);  // camera side, up and to the right
+        editorCameraId = camera->getId();
+        engine->setActiveCamera(editorCameraId);
+    }
 
-        // create material
-        auto material = std::make_shared<Material>();
-        material->pipelineType = PipelineType::LitStatic;
-        // diffuse (color -> sRGB) at t0, specular (data mask -> linear) at t1, in slot order.
-        SDL_GPUSampler* sampler = resourceManager->getSampler(SamplerType::LinearWrap);
-        material->textures.push_back({ resourceManager->getTexture("textures/container2.png", true), sampler });
-        material->textures.push_back({ resourceManager->getTexture("textures/container2_specular.png", false), sampler });
-        // material uniform (b1 space3): just shininess for now.
-        // https://learnopengl.com/Advanced-Lighting/Advanced-Lighting
-        // hardcoded exponent value to 64
-        MaterialUniform matUniform{};
-        matUniform.shininess = 64.0f;
-        material->setUniform(matUniform);
+    bool Editor::captureCameraPose(glm::vec3& outPosition, glm::quat& outRotation) const {
+        Entity* camera = engine->getEntity(editorCameraId);
+        if (!camera) return false;
+        auto* transform = camera->getComponent<TransformComponent>();
+        if (!transform) return false;
+        outPosition = transform->position;
+        outRotation = transform->rotation;
+        return true;
+    }
 
-        Entity* cube = engine->addEntity();
-        auto cubeTransform = cube->addComponent<TransformComponent>();
-        cubeTransform->scale = glm::vec3(0.5);
-        auto cubeRender = cube->addComponent<RenderComponent>();
-        // add mesh and materials to render component
-        std::shared_ptr<Mesh> cubeMesh = resourceManager->getMesh("models/cube.glb");
-        cubeRender->setMesh(cubeMesh);
-        cubeRender->addMaterial(material);
-
-        Entity* cube2 = engine->addEntity();
-        auto cube2Transform = cube2->addComponent<TransformComponent>();
-        auto cube2Render = cube2->addComponent<RenderComponent>();
-        cube2Render->setMesh(cubeMesh);
-        cube2Render->addMaterial(material);
-        cube2Transform->position = glm::vec3(2.0f, -1.0f, -5.0f);;
-
-        // create floor
-        auto floorMaterial = std::make_shared<Material>();
-        floorMaterial->pipelineType = PipelineType::LitStatic;
-        floorMaterial->textures.push_back({ resourceManager->getTexture("textures/wood.png", true), sampler });
-        floorMaterial->textures.push_back({ resourceManager->getSolidTexture(255), sampler });
-        MaterialUniform floorMatUniform{};
-        floorMatUniform.shininess = 64.0f;
-        floorMatUniform.uvScale = glm::vec2(4.00f);
-        floorMaterial->setUniform(floorMatUniform);
-
-        Entity* floor = engine->addEntity();
-        auto floorTransform = floor->addComponent<TransformComponent>();
-        floorTransform->position = glm::vec3(0.0f, -2.0f, 0.0f);
-        auto floorRender = floor->addComponent<RenderComponent>();
-        std::shared_ptr<Mesh> floorMesh = resourceManager->getMesh("models/floor.glb");
-        floorRender->setMesh(floorMesh);
-        floorRender->addMaterial(floorMaterial);
-        auto floorCollider = floor->addComponent<RigidbodyComponent>();
-        floorCollider->type = physics::BodyType::Static;
-        floorCollider->colliders = { { .shape = physics::ColliderShape::Box, .halfExtents = glm::vec3(10.0f, 0.1f, 10.0f) } };
-
-        // physics: a sphere that falls onto the floor
-        Entity* sphere = engine->addEntity();
-        auto sphereTransform = sphere->addComponent<TransformComponent>();
-        sphereTransform->position = glm::vec3(0.0f, 5.0f, 0.0f);
-        auto sphereBody = sphere->addComponent<RigidbodyComponent>();
-        sphereBody->type = physics::BodyType::Dynamic;
-        sphereBody->colliders = { { .shape = physics::ColliderShape::Sphere, .radius = 1.0f } };
-        
-        // sphere material
-        auto sphereMaterial = std::make_shared<Material>();
-        sphereMaterial->pipelineType = PipelineType::LitStatic;
-        sphereMaterial->textures.push_back({ resourceManager->getSolidTexture(187, 108, 224), sampler });
-        sphereMaterial->textures.push_back({ resourceManager->getSolidTexture(255), sampler });
-        auto sphereRender = sphere->addComponent<RenderComponent>();
-        std::shared_ptr<Mesh> sphereMesh = resourceManager->getMesh("models/sphere.glb");
-        sphereRender->setMesh(sphereMesh);
-        sphereRender->addMaterial(sphereMaterial);
+    void Editor::applyCameraPose(const glm::vec3& position, const glm::quat& rotation){
+        Entity* camera = engine->getEntity(editorCameraId);
+        if (!camera) return;
+        auto* transform = camera->getComponent<TransformComponent>();
+        if (!transform) return;
+        transform->position = position;
+        transform->rotation = rotation;
     }
 
     void Editor::eventTick(const SDL_Event& event){
@@ -334,14 +285,39 @@ namespace ytail
         ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
             ImGuiDockNodeFlags_PassthruCentralNode);
 
-        // Toolbar: play/pause the fixed-step simulation, then the gizmo controls
+        // Toolbar: play/stop the simulation, save/load, then the gizmo controls
         ImGui::Begin("Toolbar");
         const bool simulating = engine->isSimulating();
-        if (ImGui::Button(simulating ? "Pause" : "Play")) {
-            simulating ? engine->setPlayState(PlayState::Paused) : engine->setPlayState(PlayState::Simulating);
+        if (ImGui::Button(simulating ? "Stop" : "Play")) {
+            if (simulating) {
+                // Stop: pause and restore the scene to its pre-Play state, keeping the fly-cam pose.
+                engine->setPlayState(PlayState::Paused);
+                if (playSnapshot) {
+                    glm::vec3 camPos(0.0f);
+                    glm::quat camRot(1.0f, 0.0f, 0.0f, 0.0f);
+                    const bool hadPose = captureCameraPose(camPos, camRot);
+                    loadSceneFromJson(*engine, *playSnapshot);
+                    createEditorCamera();
+                    if (hadPose) applyCameraPose(camPos, camRot);
+                }
+                setSelected(0);
+            } else {
+                // Play: snapshot the live scene (including unsaved edits), then simulate.
+                playSnapshot = std::make_unique<nlohmann::json>(saveSceneToJson(*engine));
+                engine->setPlayState(PlayState::Simulating);
+            }
         }
         ImGui::SameLine();
         ImGui::TextUnformatted(simulating ? "Simulating" : "Paused");
+
+        ImGui::SameLine(0.0f, 20.0f);
+        if (ImGui::Button("Save")) saveScene(*engine, "scenes/main.scene.json");
+        ImGui::SameLine();
+        if (ImGui::Button("Load")) {
+            loadScene(*engine, "scenes/main.scene.json");
+            createEditorCamera();
+            setSelected(0);
+        }
 
         ImGui::SameLine(0.0f, 20.0f);
         if (ImGui::RadioButton("Translate", gizmoOperation == ImGuizmo::TRANSLATE)) gizmoOperation = ImGuizmo::TRANSLATE;

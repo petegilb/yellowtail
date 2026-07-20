@@ -13,10 +13,20 @@
 #include "TransformComponent.h"
 #include "engine/Constants.h"
 #include "engine/Entity.h"
+#include "engine/serialize/Archive.h"
 #include "engine/Input.h"
 
 namespace ytail
 {
+    void FreeMovementComponent::serialize(Archive& ar) {
+        ar("moveSpeed", moveSpeed);
+        ar("minSpeed", minSpeed);
+        ar("maxSpeed", maxSpeed);
+        ar("scrollPower", scrollPower);
+        ar("lookSensitivity", lookSensitivity);
+        ar("requireRightClick", requireRightClick);
+    }
+
     bool FreeMovementComponent::ensureTransform(){
         if (transformComp == nullptr && owner != nullptr){
             transformComp = owner->getComponent<TransformComponent>();

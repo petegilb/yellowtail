@@ -15,6 +15,7 @@
 
 #include "Entity.h"
 #include "GameplayStatics.h"
+#include "serialize/ComponentRegistry.h"
 
 namespace ytail {
     class ResourceManager;
@@ -85,6 +86,10 @@ namespace ytail {
         void handleInput(const SDL_KeyboardEvent& keyboard_event);
 
         Entity* addEntity();
+        // Create an entity with a set id, used when loading a scene.
+        Entity* addEntityWithId(Uint32 id);
+        // Remove every entity. Used before loading a scene.
+        void clearScene();
         Entity* getEntity(Uint32 id);
 
         // All entities, for the editor outliner. Lookups by id still go through getEntity().
@@ -98,6 +103,15 @@ namespace ytail {
         // Build a world-space ray from a window pixel through the active camera. False if no camera.
         [[nodiscard]] bool screenPointToRay(float screenX, float screenY,
                                             glm::vec3& outOrigin, glm::vec3& outDir) const;
+
+        // Scene ambient light: the shader uses color * intensity.
+        [[nodiscard]] glm::vec3 getAmbientColor() const { return { ambientDebug.x, ambientDebug.y, ambientDebug.z }; }
+        void setAmbientColor(const glm::vec3& color) { ambientDebug = ImVec4(color.x, color.y, color.z, 1.0f); }
+        [[nodiscard]] float getAmbientIntensity() const { return ambientIntensity; }
+        void setAmbientIntensity(float intensity) { ambientIntensity = intensity; }
+
+        // Builds components by serial id when loading a scene.
+        [[nodiscard]] const ComponentRegistry& getComponentRegistry() const { return componentRegistry; }
 
         bool showPhysicsShapes = false;
     protected:
@@ -163,6 +177,9 @@ namespace ytail {
 
         // ResourceManager that handles the lifetimes of objects loaded into memory
         std::unique_ptr<ytail::ResourceManager> resourceManager;
+
+        // Maps component serial ids to factories, filled once in the constructor.
+        ComponentRegistry componentRegistry;
 
         // Draws the physics debug wireframe. Off unless showPhysicsShapes is enabled.
         std::unique_ptr<ytail::DebugLineRenderer> debugLineRenderer;

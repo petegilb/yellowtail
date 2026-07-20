@@ -47,6 +47,8 @@ namespace ytail {
         Mesh& operator=(const Mesh&) = delete;
 
         std::string name = "undefined";
+        // The file this mesh came from (e.g. "models/cube.glb"), used when saving.
+        std::string sourcePath;
         SDL_GPUBuffer* vertexBuffer = nullptr;
         SDL_GPUBuffer* indexBuffer  = nullptr;
         // different pieces of the main mesh so we can have multiple materials per mesh

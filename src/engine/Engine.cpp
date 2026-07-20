@@ -23,6 +23,7 @@
 namespace ytail {
     Engine::Engine() {
         GameplayStatics::engine = this;
+        componentRegistry.registerBuiltins();
 
         SDL_SetLogPriorities(logPriority);
 
@@ -611,6 +612,19 @@ namespace ytail {
         entityCounter++;
         entities[entityCounter] = std::make_unique<Entity>(entityCounter);
         return entities[entityCounter].get();
+    }
+
+    Entity* Engine::addEntityWithId(const Uint32 id) {
+        entities[id] = std::make_unique<Entity>(id);
+        // keep the counter ahead of every loaded id so new entities don't reuse one
+        if (static_cast<int>(id) > entityCounter) entityCounter = static_cast<int>(id);
+        return entities[id].get();
+    }
+
+    void Engine::clearScene() {
+        entities.clear();
+        activeCamera = nullptr;
+        entityCounter = 0;
     }
 
     Entity* Engine::getEntity(const Uint32 id) {

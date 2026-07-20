@@ -5,6 +5,7 @@
 #ifndef YELLOWTAIL_TEXTURE_H
 #define YELLOWTAIL_TEXTURE_H
 
+#include <string>
 #include <SDL3/SDL.h>
 
 namespace ytail {
@@ -19,6 +20,8 @@ namespace ytail {
         Texture& operator=(const Texture&) = delete;
 
         SDL_GPUTexture* handle() const { return tex; }
+        // The file this texture came from (empty for solid-color textures), used when saving.
+        std::string sourcePath;
         Uint32 width = 0, height = 0;
     private:
         SDL_GPUDevice*  device = nullptr;

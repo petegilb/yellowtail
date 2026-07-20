@@ -23,6 +23,10 @@ public:
         [[nodiscard]] const std::string& getName() const { return name; }
         void setName(const std::string& newName) { name = newName; }
 
+        // False keeps this entity out of saved scenes
+        [[nodiscard]] bool isSerializable() const { return serializable; }
+        void setSerializable(bool value) { serializable = value; }
+
         // Components in attach order, for the editor to iterate and inspect
         [[nodiscard]] const std::vector<std::unique_ptr<Component>>& getComponents() const { return components; }
 
@@ -44,8 +48,15 @@ public:
                           "T must derive from ytail::Component");
             auto owned = std::make_unique<T>(std::forward<Args>(args)...);
             T* ptr = owned.get();
-            ptr->owner = this;
-            components.push_back(std::move(owned));
+            addComponent(std::move(owned));   // one place does the actual attaching
+            return ptr;
+        }
+
+        // Attach a component that's already been created (e.g. by the load registry).
+        Component* addComponent(std::unique_ptr<Component> component) {
+            component->owner = this;
+            Component* ptr = component.get();
+            components.push_back(std::move(component));
             return ptr;
         }
 
@@ -68,6 +79,7 @@ public:
 private:
         Uint32 entityId;
         std::string name;
+        bool serializable = true;
         std::vector<std::unique_ptr<Component>> components;
     };
 } // ytail

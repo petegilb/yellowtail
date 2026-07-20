@@ -6,7 +6,15 @@
 
 #include "imgui.h"
 
+#include "../serialize/Archive.h"
+
 namespace ytail {
+    void CameraComponent::serialize(Archive& ar) {
+        ar("fovYDegrees", fovYDegrees);
+        ar("nearPlane", nearPlane);
+        ar("farPlane", farPlane);
+    }
+
     void CameraComponent::drawInspector() {
         ImGui::DragFloat("FOV (deg)", &fovYDegrees, 0.5f, 1.0f, 179.0f);
         ImGui::DragFloat("Near", &nearPlane, 0.01f, 0.001f, farPlane);

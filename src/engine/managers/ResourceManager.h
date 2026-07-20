@@ -35,6 +35,8 @@ public:
         std::shared_ptr<Texture> getSolidTexture(Uint8 x);
         // get or load the mesh at the specified path
         std::shared_ptr<Mesh> getMesh(const std::string& path);
+        // get or load the material from a .mat file. Loads its textures (file or solid color) and samplers.
+        std::shared_ptr<Material> getMaterial(const std::string& path);
         // get the pipeline based on the pipeline type. When outline is true, lit pipelines are
         // swapped for their stencil-stamping variant so the outline pass has a silhouette to mask.
         SDL_GPUGraphicsPipeline* getPipeline(PipelineType type, bool outline = false);
@@ -47,6 +49,11 @@ public:
         // per-frame depth buffer so the texture and the pipelines agree on the format.
         [[nodiscard]] SDL_GPUTextureFormat getDepthStencilFormat() const { return depthStencilFormat; }
 
+        // Turn an assets-relative path into an absolute path next to the executable.
+        [[nodiscard]] std::string resolveAssetPath(const std::string& path) const {
+            return std::string(BasePath) + "assets/" + path;
+        }
+
     private:
         SDL_GPUDevice* device = nullptr;
         SDL_Window* window = nullptr;
@@ -56,13 +63,9 @@ public:
         // required for the outline mask). Prefers D24_S8, falls back to D32_S8.
         SDL_GPUTextureFormat depthStencilFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT;
 
-        // Resolve an assets-relative path (e.g. "models/cube.gltf") to an absolute path
-        // next to the executable. Callers pass the short path; the cache still keys on it.
-        std::string resolveAssetPath(const std::string& path) const {
-            return std::string(BasePath) + "assets/" + path;
-        }
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
         std::unordered_map<std::string, std::shared_ptr<Mesh>> meshes;
+        std::unordered_map<std::string, std::shared_ptr<Material>> materials;
 
         // all samplers that exist! initialized on creation of the resource manager.
         std::array<SDL_GPUSampler*, static_cast<size_t>(SamplerType::Count)> samplers{};

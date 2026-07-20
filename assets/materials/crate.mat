@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "pipeline": "LitStatic",
+  "textures": [
+    { "path": "textures/container2.png", "srgb": true, "sampler": "LinearWrap" },
+    { "path": "textures/container2_specular.png", "srgb": false, "sampler": "LinearWrap" }
+  ],
+  "uniform": { "shininess": 64 }
+}

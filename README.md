@@ -63,6 +63,7 @@ yellowtail/
 - https://www.opengl-tutorial.org/miscellaneous/clicking-on-objects/picking-with-custom-ray-obb-function/
 - https://webgpufundamentals.org/webgpu/lessons/webgpu-picking.html
 - https://jorenjoestar.github.io/post/serialization_for_games/
+- https://handmade.network/p/29/swedish-cubes-for-unity/blog/p/2723-how_media_molecule_does_serialization
 
 ## Shaders (SDL_gpu via SDL_shadercross)
 

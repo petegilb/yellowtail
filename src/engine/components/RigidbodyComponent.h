@@ -26,6 +26,10 @@ namespace ytail {
         // Editor gizmo writes a collider's body-local offset/rotation and flags a rebuild.
         void setColliderTransform(size_t index, const glm::vec3& offset, const glm::quat& rotation);
 
+        static constexpr const char* SerialId = "rigidbody";
+        void serialize(Archive& ar) override;
+        [[nodiscard]] const char* serialId() const override { return SerialId; }
+
         [[nodiscard]] const char* getTypeName() const override { return "Rigidbody"; }
         void drawInspector() override;
 

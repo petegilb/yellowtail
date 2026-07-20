@@ -23,6 +23,10 @@ public:
             return glm::perspective(glm::radians(fovYDegrees), aspect, nearPlane, farPlane);
         }
 
+        static constexpr const char* SerialId = "camera";
+        void serialize(Archive& ar) override;
+        [[nodiscard]] const char* serialId() const override { return SerialId; }
+
         [[nodiscard]] const char* getTypeName() const override { return "Camera"; }
         void drawInspector() override;
     };

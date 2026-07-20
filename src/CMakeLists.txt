@@ -25,6 +25,7 @@ target_link_libraries(engine PUBLIC
         enet::enet_static
         Jolt
         glm::glm
+        nlohmann_json::nlohmann_json
 )
 
 # GLM defaults to OpenGL's [-1, 1] clip-space Z; SDL_GPU (Vulkan/D3D12/Metal) wants [0, 1].

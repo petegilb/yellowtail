@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "pipeline": "LitStatic",
+  "textures": [
+    { "path": "textures/wood.png", "srgb": true, "sampler": "LinearWrap" },
+    { "solid": [255], "sampler": "LinearWrap" }
+  ],
+  "uniform": { "shininess": 64, "uvScale": [4, 4] }
+}

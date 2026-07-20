@@ -46,6 +46,10 @@ public:
         // TODO this just adds materials but what about if we don't have any yet? or resetting?
         void addMaterial(std::shared_ptr<Material> inMaterial);
 
+        static constexpr const char* SerialId = "render";
+        void serialize(Archive& ar) override;
+        [[nodiscard]] const char* serialId() const override { return SerialId; }
+
         [[nodiscard]] const char* getTypeName() const override { return "Render"; }
         void drawInspector() override;
     };

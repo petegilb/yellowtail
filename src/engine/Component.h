@@ -9,6 +9,7 @@
 
 namespace ytail {
     class Entity;
+    struct Archive;
     class Component {
 public:
         Component();
@@ -19,6 +20,11 @@ public:
         virtual void tick(float deltaTime) {}
 
         virtual void eventTick(const SDL_Event& event){}
+
+        // Save or load this component's fields through the archive (same code for both).
+        virtual void serialize(Archive& ar) {}
+        // The name used to save this component and build it back later. Never change it
+        [[nodiscard]] virtual const char* serialId() const { return "component"; }
 
         // Editor inspector: label for the collapsing header, and the ImGui widgets
         [[nodiscard]] virtual const char* getTypeName() const { return "Component"; }

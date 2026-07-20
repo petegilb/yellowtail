@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "pipeline": "LitStatic",
+  "textures": [
+    { "solid": [187, 108, 224], "sampler": "LinearWrap" },
+    { "solid": [255], "sampler": "LinearWrap" }
+  ],
+  "uniform": { "shininess": 64 }
+}

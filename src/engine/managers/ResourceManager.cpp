@@ -3,11 +3,13 @@
 //
 
 #include "ResourceManager.h"
+#include <fstream>
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_shadercross/SDL_shadercross.h>
 #include <cgltf.h>
 
 #include "../render/JoltDebugVertex.h"
+#include "../serialize/EnumJson.h"
 
 namespace ytail {
     ResourceManager::ResourceManager(SDL_GPUDevice* inDevice, SDL_Window* inWindow, const char* inBasePath) {
@@ -115,8 +117,10 @@ namespace ytail {
         SDL_DestroySurface(converted);
 
         // create texture and return it
-        textures.insert({path, std::make_shared<Texture>(device, gpuTexture, imageWidth, imageHeight)});
-        return textures[path];
+        auto texture = std::make_shared<Texture>(device, gpuTexture, imageWidth, imageHeight);
+        texture->sourcePath = path;
+        textures.insert({path, texture});
+        return texture;
     }
 
     std::shared_ptr<Texture> ResourceManager::getSolidTexture(Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
@@ -305,6 +309,7 @@ namespace ytail {
 
         // create mesh object and make sure we can store everything properly
         std::shared_ptr<Mesh> mesh = std::make_shared<Mesh>(device, name, vertexBuffer, indexBuffer, submeshes);
+        mesh->sourcePath = path;
 
         // local-space bounds over all vertices (for an aabb)
         if (!vertices.empty()) {
@@ -321,6 +326,59 @@ namespace ytail {
         meshes[path] = mesh;
         cgltf_free(data);
         return mesh;
+    }
+
+    std::shared_ptr<Material> ResourceManager::getMaterial(const std::string& path) {
+        if (materials.contains(path)) return materials[path];
+
+        // Read the .mat file (e.g. "materials/crate.mat").
+        std::ifstream file(resolveAssetPath(path));
+        if (!file.is_open()) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not open material file: %s", path.c_str());
+            return nullptr;
+        }
+        nlohmann::json j;
+        try {
+            file >> j;
+        } catch (const std::exception& e) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not parse material %s: %s", path.c_str(), e.what());
+            return nullptr;
+        }
+
+        auto material = std::make_shared<Material>();
+        material->sourcePath = path;
+        if (j.contains("pipeline")) j.at("pipeline").get_to(material->pipelineType);
+
+        // Each texture entry has a sampler, and is either a file path or a solid color.
+        if (j.contains("textures")) {
+            for (const auto& t : j.at("textures")) {
+                const SamplerType samplerType = t.value("sampler", SamplerType::LinearWrap);
+                SDL_GPUSampler* sampler = getSampler(samplerType);
+
+                std::shared_ptr<Texture> texture;
+                if (t.contains("solid")) {
+                    const auto& c = t.at("solid");
+                    if (c.size() == 1) {
+                        texture = getSolidTexture(c.at(0).get<Uint8>());
+                    } else if (c.size() >= 3) {
+                        const Uint8 a = c.size() >= 4 ? c.at(3).get<Uint8>() : 255;
+                        texture = getSolidTexture(c.at(0).get<Uint8>(), c.at(1).get<Uint8>(),
+                                                  c.at(2).get<Uint8>(), a);
+                    }
+                } else if (t.contains("path")) {
+                    texture = getTexture(t.at("path").get<std::string>(), t.value("srgb", false));
+                }
+                material->textures.push_back({ texture, sampler, samplerType });
+            }
+        }
+
+        // Uniform values (uvScale/uvOffset/shininess); missing fields keep their defaults.
+        MaterialUniform uniform{};
+        if (j.contains("uniform")) j.at("uniform").get_to(uniform);
+        material->setUniform(uniform);
+
+        materials[path] = material;
+        return material;
     }
 
     SDL_GPUGraphicsPipeline* ResourceManager::getPipeline(PipelineType type, bool outline) {

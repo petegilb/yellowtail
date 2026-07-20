@@ -6,6 +6,7 @@
 #define YELLOWTAIL_MATERIAL_H
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
@@ -51,10 +52,15 @@ namespace ytail {
     struct TextureBinding {
         std::shared_ptr<Texture> texture;
         SDL_GPUSampler* sampler = nullptr;
+        // Which sampler this is, so we can save the choice.
+        SamplerType samplerType = SamplerType::LinearWrap;
     };
 
     class Material {
     public:
+        // The .mat file this came from (empty if built in code). Lets us save which material it is.
+        std::string sourcePath;
+
         PipelineType pipelineType = PipelineType::LitStatic;
 
         // in shader slot order (t0, t1, ...)

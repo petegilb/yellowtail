@@ -132,6 +132,15 @@ FetchContent_Declare(glm
 )
 FetchContent_MakeAvailable(glm)
 
+# --- nlohmann/json (header-only, scene/material serialization) ---
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.11.3
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 # --- Jolt Physics ---
 # Jolt's Build/CMakeLists.txt mutates global CMAKE_CXX_FLAGS (adds -fno-rtti,
 # -fno-exceptions, /WX, etc.). Save/restore the flag string so the rest of

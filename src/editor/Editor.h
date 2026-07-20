@@ -5,7 +5,11 @@
 #ifndef YELLOWTAIL_EDITOR_H
 #define YELLOWTAIL_EDITOR_H
 
+#include <memory>
+
 #include <SDL3/SDL.h>
+#include <glm/fwd.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include "imgui.h"
 #include "imguizmo/ImGuizmo.h"
@@ -29,6 +33,17 @@ namespace ytail
 
     protected:
         void handleInput(const SDL_KeyboardEvent& keyboard_event);
+
+        // The editor's own fly camera, recreated after each scene load (it isn't part of the scene).
+        void createEditorCamera();
+        // Save/restore the fly-cam pose so it stays put across a scene reload.
+        bool captureCameraPose(glm::vec3& outPosition, glm::quat& outRotation) const;
+        void applyCameraPose(const glm::vec3& position, const glm::quat& rotation);
+        // entity id of the editor camera (0 before it's created).
+        Uint32 editorCameraId = 0;
+
+        // Scene state captured on Play, restored on Stop so simulation edits can be undone.
+        std::unique_ptr<nlohmann::json> playSnapshot;
 
         // pick the nearest mesh under a window pixel and select it (0 = nothing hit)
         void selectAtScreen(float screenX, float screenY);

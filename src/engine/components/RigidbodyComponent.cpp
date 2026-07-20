@@ -9,9 +9,16 @@
 #include "TransformComponent.h"
 #include "engine/Entity.h"
 #include "engine/GameplayStatics.h"
+#include "engine/serialize/Archive.h"
+#include "engine/serialize/EnumJson.h"
 
 namespace ytail {
     using namespace physics;
+
+    void RigidbodyComponent::serialize(Archive& ar) {
+        ar("colliders", colliders);
+        ar("bodyType", type);
+    }
 
     RigidbodyComponent::~RigidbodyComponent() {
         if (body != InvalidBody) PhysicsManager::get().removeBody(body);

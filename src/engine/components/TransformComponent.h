@@ -46,6 +46,10 @@ public:
             return glm::transpose(glm::inverse(modelMatrix()));
         }
 
+        static constexpr const char* SerialId = "transform";
+        void serialize(Archive& ar) override;
+        [[nodiscard]] const char* serialId() const override { return SerialId; }
+
         [[nodiscard]] const char* getTypeName() const override { return "Transform"; }
         void drawInspector() override;
     };

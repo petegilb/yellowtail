@@ -29,6 +29,10 @@ namespace ytail
         // true = hold right click for movement
         bool requireRightClick = true;
 
+        static constexpr const char* SerialId = "freeMovement";
+        void serialize(Archive& ar) override;
+        [[nodiscard]] const char* serialId() const override { return SerialId; }
+
         [[nodiscard]] const char* getTypeName() const override { return "Free Movement"; }
         void drawInspector() override;
 

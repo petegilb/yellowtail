@@ -8,7 +8,44 @@
 
 #include "imgui.h"
 
+#include "../render/Mesh.h"
+#include "../managers/ResourceManager.h"
+#include "../serialize/Archive.h"
+#include "../serialize/GlmJson.h"
+
 namespace ytail {
+    void RenderComponent::serialize(Archive& ar) {
+        // Assets are saved as file paths and loaded back through the resource manager.
+        if (ar.reading()) {
+            std::string meshPath;
+            ar("mesh", meshPath);
+            if (ar.resources && !meshPath.empty()) setMesh(ar.resources->getMesh(meshPath));
+
+            std::vector<std::string> materialPaths;
+            ar("materials", materialPaths);
+            materials.clear();
+            if (ar.resources) {
+                for (const std::string& path : materialPaths) {
+                    if (!path.empty()) addMaterial(ar.resources->getMaterial(path));
+                }
+            }
+        } else {
+            std::string meshPath = mesh ? mesh->sourcePath : std::string();
+            ar("mesh", meshPath);
+
+            std::vector<std::string> materialPaths;
+            materialPaths.reserve(materials.size());
+            for (const auto& material : materials) {
+                materialPaths.push_back(material ? material->sourcePath : std::string());
+            }
+            ar("materials", materialPaths);
+        }
+
+        ar("outline", outline);
+        ar("outlineColor", outlineColor);
+        ar("outlineScale", outlineScale);
+    }
+
     void RenderComponent::setMesh(std::shared_ptr<Mesh> inMesh) {
         mesh = std::move(inMesh);
     }
