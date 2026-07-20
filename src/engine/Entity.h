@@ -16,6 +16,7 @@
 namespace ytail {
     class Entity {
 public:
+        virtual ~Entity() = default;
         Entity(Uint32 newId);
 
         [[nodiscard]] Uint32 getId() const {return entityId;}
@@ -80,6 +81,8 @@ private:
         Uint32 entityId;
         std::string name;
         bool serializable = true;
+        // TODO update this from being stored in a vector here to storing components in the engine itself
+        // so that when we iterate them we don't have many cache misses
         std::vector<std::unique_ptr<Component>> components;
     };
 } // ytail

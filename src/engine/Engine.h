@@ -114,6 +114,13 @@ namespace ytail {
         [[nodiscard]] const ComponentRegistry& getComponentRegistry() const { return componentRegistry; }
 
         bool showPhysicsShapes = false;
+
+        // Editor reference grid on the XZ plane. gridSpacing = world units per cell,
+        // gridExtent = cells from the origin in each direction.
+        bool showGrid = false;
+        float gridSpacing = 1.0f;
+        int gridExtent = 100;
+        float gridOpacity = 0.8f;
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;
@@ -183,6 +190,9 @@ namespace ytail {
 
         // Draws the physics debug wireframe. Off unless showPhysicsShapes is enabled.
         std::unique_ptr<ytail::DebugLineRenderer> debugLineRenderer;
+
+        // Draws the editor reference grid, on its own buffer independent of the physics wireframe.
+        std::unique_ptr<ytail::DebugLineRenderer> gridLineRenderer;
 
         // The game or editor driving this engine. Non-owning, lives in main()
         Application* app = nullptr;

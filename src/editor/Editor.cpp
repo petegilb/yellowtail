@@ -47,6 +47,7 @@ namespace ytail
 
         engine->setPlayState(PlayState::Paused);
         engine->showPhysicsShapes = true;
+        engine->showGrid = true;
 
         loadScene(*engine, "scenes/main.scene.json");
         createEditorCamera();
@@ -350,6 +351,20 @@ namespace ytail
         }
         ImGui::SameLine(0.0f, 20.0f);
         ImGui::Checkbox("Show Physics Shapes", &engine->showPhysicsShapes);
+
+        // Grid dropdown: toggle the world-unit grid and adjust its cell size / extent.
+        ImGui::SameLine(0.0f, 20.0f);
+        if (ImGui::Button("Grid")) ImGui::OpenPopup("GridMenu");
+        if (ImGui::BeginPopup("GridMenu")) {
+            ImGui::Checkbox("Show Grid", &engine->showGrid);
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Cell Size", &engine->gridSpacing, 0.1f, 0.01f, 1000.0f, "%.2f");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragInt("Extent", &engine->gridExtent, 1.0f, 1, 200);
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Opacity", &engine->gridOpacity, 0.01f, 0.0f, 1.0f, "%.2f");
+            ImGui::EndPopup();
+        }
         ImGui::End();
 
         // Outliner: every entity, sorted by id for a stable order, click to select

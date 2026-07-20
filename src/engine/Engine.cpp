@@ -5,6 +5,7 @@
 #include "Engine.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -45,6 +46,7 @@ namespace ytail {
         // Release everything that owns GPU resources BEFORE destroying the device.
         entities.clear(); // RenderComponents drop their shared_ptr<Mesh>/Material
         debugLineRenderer.reset(); // frees the debug line vertex/transfer buffers
+        gridLineRenderer.reset();
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
         if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
         if (device && sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
@@ -99,6 +101,7 @@ namespace ytail {
         resourceManager = std::make_unique<ResourceManager>(device, window, BasePath);
         physics::PhysicsManager::get();
         debugLineRenderer = std::make_unique<DebugLineRenderer>(device);
+        gridLineRenderer = std::make_unique<DebugLineRenderer>(device);
         initializeImGui();
 
         // The app (game or editor) builds its scene now that the engine + resources are ready.
@@ -354,6 +357,53 @@ namespace ytail {
         setWindowMode(windowMode);
     }
 
+    // World-unit reference grid on the XZ plane (y=0). It follows the camera (snapped to cell
+    // boundaries so world units stay aligned and the origin lands on an intersection) and fades
+    // toward its rim so a finite ring of lines reads as an infinite grid. The lines through world
+    // x==0 / z==0 are tinted as the axes (X red, Z blue). Lines are split per cell so the radial
+    // fade can be evaluated per vertex.
+    static void buildGridLines(std::vector<JoltDebugVertex>& out, float spacing, int extent,
+                               const glm::vec3& camera, float opacity) {
+        out.clear();
+        if (spacing <= 0.0f || extent <= 0 || opacity <= 0.0f) return;
+
+        const float cx = std::floor(camera.x / spacing) * spacing;
+        const float cz = std::floor(camera.z / spacing) * spacing;
+        const float half = extent * spacing;
+
+        const glm::vec3 gray{0.4f, 0.4f, 0.4f};
+        const glm::vec3 xAxis{0.85f, 0.25f, 0.25f};
+        const glm::vec3 zAxis{0.3f, 0.5f, 0.9f};
+
+        // Full opacity out to half the radius, then ease to zero at the rim.
+        const auto alphaAt = [&](float x, float z) {
+            const float dx = x - cx, dz = z - cz;
+            const float d = std::sqrt(dx * dx + dz * dz);
+            const float t = glm::clamp((d - 0.5f * half) / (0.5f * half), 0.0f, 1.0f);
+            return opacity * (1.0f - t * t);
+        };
+        const auto push = [&](float x, float z, const glm::vec3& base) {
+            out.push_back({ {x, 0.0f, z}, glm::vec4(base, alphaAt(x, z)) });
+        };
+
+        for (int i = -extent; i <= extent; ++i) {
+            const float x = cx + i * spacing;
+            const glm::vec3& color = std::abs(x) < 0.5f * spacing ? zAxis : gray;  // world x==0 -> Z axis
+            for (int s = -extent; s < extent; ++s) {
+                push(x, cz + s * spacing, color);
+                push(x, cz + (s + 1) * spacing, color);
+            }
+        }
+        for (int i = -extent; i <= extent; ++i) {
+            const float z = cz + i * spacing;
+            const glm::vec3& color = std::abs(z) < 0.5f * spacing ? xAxis : gray;  // world z==0 -> X axis
+            for (int s = -extent; s < extent; ++s) {
+                push(cx + s * spacing, z, color);
+                push(cx + (s + 1) * spacing, z, color);
+            }
+        }
+    }
+
     int Engine::renderTick(float alpha) {
         drawCallsLastFrame = 0;
 
@@ -417,6 +467,13 @@ namespace ytail {
         if (showPhysicsShapes && debugLineRenderer) {
             physics::PhysicsManager::get().debugDraw();
             debugLineRenderer->upload(commandBuffer, physics::PhysicsManager::get().getDebugLines());
+        }
+
+        // Editor grid: rebuild + stage its world-space lines (same before-pass copy rule).
+        if (showGrid && gridLineRenderer) {
+            std::vector<JoltDebugVertex> gridLines;
+            buildGridLines(gridLines, gridSpacing, gridExtent, camXform->position, gridOpacity);
+            gridLineRenderer->upload(commandBuffer, gridLines);
         }
 
         // Depth+stencil attachment for the geometry pass. Depth clears to the far plane (1.0);
@@ -568,6 +625,12 @@ namespace ytail {
             }
         }
 
+        // Editor grid, under the scene geometry (drawn first, depth-tested).
+        if (showGrid && gridLineRenderer) {
+            gridLineRenderer->draw(renderPass, commandBuffer,
+                resourceManager->getPipeline(PipelineType::DebugLine), projection * view);
+        }
+
         // Physics debug wireframe on top of the scene (world-space verts, depth-tested, no write).
         if (showPhysicsShapes && debugLineRenderer) {
             debugLineRenderer->draw(renderPass, commandBuffer,
@@ -690,6 +753,7 @@ namespace ytail {
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable docking for editor panels
+        io.ConfigDragClickToInputText = true;                     // click a drag widget to type a value
 
         // Setup Dear ImGui style
         ImGui::StyleColorsDark();

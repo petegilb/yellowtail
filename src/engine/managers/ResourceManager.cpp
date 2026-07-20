@@ -834,6 +834,14 @@ namespace ytail {
 
             SDL_GPUColorTargetDescription colorTarget = {};
             colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device, window);
+            // Alpha blend so debug lines can be translucent (grid opacity + distance fade).
+            colorTarget.blend_state.enable_blend = true;
+            colorTarget.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+            colorTarget.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+            colorTarget.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+            colorTarget.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+            colorTarget.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+            colorTarget.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
 
             SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {};
             pipelineCreateInfo.vertex_shader = vertexShader;
