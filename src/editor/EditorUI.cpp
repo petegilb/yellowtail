@@ -124,6 +124,7 @@ namespace ytail
 
         selectedEntity = id;
         selectedCollider = -1;
+        engine->selectedEntity = id;  // drives the selected point light's attenuation gizmo
 
         if (Entity* current = engine->getEntity(selectedEntity)){
             if (auto* renderComp = current->getComponent<RenderComponent>()){

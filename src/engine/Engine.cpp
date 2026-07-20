@@ -18,6 +18,7 @@
 #include "Input.h"
 #include "managers/PhysicsManager.h"
 #include "render/DebugLineRenderer.h"
+#include "render/DebugDraw.h"
 #include "components/RenderComponent.h"
 #include "components/TransformComponent.h"
 #include "components/CameraComponent.h"
@@ -50,6 +51,7 @@ namespace ytail {
         entities.clear(); // RenderComponents drop their shared_ptr<Mesh>/Material
         debugLineRenderer.reset(); // frees the debug line vertex/transfer buffers
         gridLineRenderer.reset();
+        gizmoLineRenderer.reset();
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
         if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
         if (device && sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
@@ -103,8 +105,10 @@ namespace ytail {
         BasePath = SDL_GetBasePath();
         resourceManager = std::make_unique<ResourceManager>(device, window, BasePath);
         physics::PhysicsManager::get();
+        // TODO should I shield these from being created in release builds?
         debugLineRenderer = std::make_unique<DebugLineRenderer>(device);
         gridLineRenderer = std::make_unique<DebugLineRenderer>(device);
+        gizmoLineRenderer = std::make_unique<DebugLineRenderer>(device);
         initializeImGui();
 
         // set app icon
@@ -414,6 +418,30 @@ namespace ytail {
         }
     }
 
+    // Light gizmos tinted with each light's color
+    static void buildLightGizmos(DebugDraw& debug,
+        const std::unordered_map<Uint32, std::unique_ptr<Entity>>& entities,
+        Uint32 selectedEntity
+    ) {
+        debug.clear();
+        for (const auto& [id, entity] : entities) {
+            if (entity == nullptr) continue;
+            const auto* light = entity->getComponent<LightComponent>();
+            const auto* transform = entity->getComponent<TransformComponent>();
+            if (light == nullptr || transform == nullptr) continue;
+
+            const glm::vec4 color(light->color, 1.0f);
+            const glm::vec3 pos = transform->position;
+
+            if (light->type == LightType::Directional) {
+                const glm::vec3 dir = glm::normalize(transform->rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+                debug.arrow(pos, pos + dir * 1.5f, color);
+            } else if (id == selectedEntity && light->attenuation > 0.0f) {
+                debug.wireSphere(pos, light->attenuation, color);
+            }
+        }
+    }
+
     int Engine::renderTick(float alpha) {
         ZoneScoped;
         drawCallsLastFrame = 0;
@@ -485,6 +513,13 @@ namespace ytail {
             std::vector<JoltDebugVertex> gridLines;
             buildGridLines(gridLines, gridSpacing, gridExtent, camXform->position);
             gridLineRenderer->upload(commandBuffer, gridLines);
+        }
+
+        // Editor light gizmos: rebuild + stage (same before-pass copy rule).
+        if (showLightGizmos && gizmoLineRenderer) {
+            DebugDraw gizmos;
+            buildLightGizmos(gizmos, entities, selectedEntity);
+            gizmoLineRenderer->upload(commandBuffer, gizmos.vertices());
         }
 
         // Depth+stencil attachment for the geometry pass. Depth clears to the far plane (1.0);
@@ -663,6 +698,12 @@ namespace ytail {
         // Physics debug wireframe on top of the scene (world-space verts, depth-tested, no write).
         if (showPhysicsShapes && debugLineRenderer) {
             debugLineRenderer->draw(renderPass, commandBuffer,
+                resourceManager->getPipeline(PipelineType::DebugLine), projection * view);
+        }
+
+        // Light gizmos, on top of the scene using the same flat line pipeline.
+        if (showLightGizmos && gizmoLineRenderer) {
+            gizmoLineRenderer->draw(renderPass, commandBuffer,
                 resourceManager->getPipeline(PipelineType::DebugLine), projection * view);
         }
 

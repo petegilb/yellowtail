@@ -128,6 +128,10 @@ namespace ytail {
         float gridSpacing = 1.0f;
         int gridExtent = 100;
         float gridOpacity = 0.8f;
+
+        // Editor light gizmos
+        bool showLightGizmos = false;
+        Uint32 selectedEntity = 0;
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;
@@ -200,6 +204,9 @@ namespace ytail {
 
         // Draws the editor reference grid, on its own buffer independent of the physics wireframe.
         std::unique_ptr<ytail::DebugLineRenderer> gridLineRenderer;
+
+        // Draws editor light gizmos (arrows / attenuation spheres), on its own buffer.
+        std::unique_ptr<ytail::DebugLineRenderer> gizmoLineRenderer;
 
         // The game or editor driving this engine. Non-owning, lives in main()
         Application* app = nullptr;

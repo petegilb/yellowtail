@@ -32,6 +32,7 @@ namespace ytail
         engine->setPlayState(PlayState::Paused);
         engine->showPhysicsShapes = true;
         engine->showGrid = true;
+        engine->showLightGizmos = true;
 
         loadScene(*engine, currentScenePath);
         createEditorCamera();
