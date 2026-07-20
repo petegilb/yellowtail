@@ -5,6 +5,8 @@
 #include "SceneSerializer.h"
 
 #include <fstream>
+#include <string>
+
 #include <nlohmann/json.hpp>
 
 #include "Archive.h"
@@ -99,6 +101,83 @@ namespace ytail {
         }
         file << saveSceneToJson(engine).dump(2);
         return true;
+    }
+
+    static bool entityNameInUse(const Engine& engine, const std::string& name) {
+        for (const auto& [id, entity] : engine.getEntities()) {
+            if (entity && entity->getName() == name) return true;
+        }
+        return false;
+    }
+
+    // Pick the name for a duplicate: increment a trailing number if the name ends in one
+    // ("Box 1" -> "Box 2"), otherwise append one ("Box" -> "Box1"), skipping any name that's
+    // already taken so duplicates never collide.
+    static std::string nextEntityName(const Engine& engine, const std::string& name) {
+        size_t digitsStart = name.size();
+        while (digitsStart > 0 && std::isdigit(static_cast<unsigned char>(name[digitsStart - 1]))) {
+            digitsStart--;
+        }
+
+        std::string stem = name.substr(0, digitsStart);
+        int start = 1;
+        if (digitsStart < name.size()) {
+            try {
+                start = std::stoi(name.substr(digitsStart)) + 1;
+            } catch (const std::exception&) {
+                // Digit run too long to parse: fall back to appending to the whole name.
+                stem = name;
+                start = 1;
+            }
+        }
+
+        for (int n = start; ; ++n) {
+            std::string candidate = stem + std::to_string(n);
+            if (!entityNameInUse(engine, candidate)) return candidate;
+        }
+    }
+
+    // Clone one entity into the scene (components via a save->load round-trip), reparent it
+    // under parentId (0 = root), then recurse into the source's children.
+    static Entity* cloneEntityRecursive(Engine& engine, const Entity* src, Uint32 parentId) {
+        Entity* copy = engine.addEntity();
+        copy->setName(src->getName());
+        copy->setSerializable(src->isSerializable());
+
+        for (const auto& component : src->getComponents()) {
+            nlohmann::json compJson;
+            compJson["type"] = component->serialId();
+            Archive out{ &compJson, false, SCENE_VERSION, engine.getResourceManager() };
+            component->serialize(out);
+
+            std::unique_ptr<Component> clone = engine.getComponentRegistry().create(component->serialId());
+            if (!clone) continue;
+            Component* attached = copy->addComponent(std::move(clone));
+            Archive in{ &compJson, true, SCENE_VERSION, engine.getResourceManager() };
+            attached->serialize(in);
+        }
+
+        if (parentId != 0) engine.reparent(copy->getId(), parentId);
+
+        for (const Entity* child : src->getChildren()) {
+            cloneEntityRecursive(engine, child, copy->getId());
+        }
+        return copy;
+    }
+
+    Uint32 duplicateEntity(Engine& engine, Uint32 sourceId) {
+        const Entity* src = engine.getEntity(sourceId);
+        if (!src) return 0;
+
+        // Chosen before cloning (the clones don't exist yet, so they can't shadow the name).
+        const std::string newName = nextEntityName(engine, src->getName());
+        const Entity* parent = src->getParent();
+        Entity* copy = cloneEntityRecursive(engine, src, parent ? parent->getId() : 0);
+        if (!copy) return 0;
+
+        // Only the top-level duplicate is renamed; children keep their names.
+        copy->setName(newName);
+        return copy->getId();
     }
 
     bool loadScene(Engine& engine, const std::string& path) {

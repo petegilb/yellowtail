@@ -6,40 +6,21 @@
 #define YELLOWTAIL_EDITOR_H
 
 #include <memory>
+#include <string>
 
 #include <SDL3/SDL.h>
 #include <glm/fwd.hpp>
 #include <nlohmann/json_fwd.hpp>
 
-#include "imgui.h"
-#include "imguizmo/ImGuizmo.h"
-
 #include "engine/Application.h"
-#include "engine/render/Material.h"
+#include "EditorUI.h"
 
 namespace ytail
 {
     class Engine;
-    class Entity;
-    class RigidbodyComponent;
-    class RenderComponent;
 
-    // One texture entry while authoring a material: either a solid color or a file path.
-    struct MaterialTextureDef {
-        bool solid = true;
-        glm::vec4 color{1.0f};
-        std::string path;
-        bool srgb = false;
-        SamplerType sampler = SamplerType::LinearWrap;
-    };
-
-    // Editor-side authoring model for a .mat file (the file is the source of truth).
-    struct MaterialDef {
-        PipelineType pipeline = PipelineType::LitStatic;
-        std::vector<MaterialTextureDef> textures;
-        MaterialUniform uniform;
-    };
-
+    // The editor application: scene lifecycle, the fly camera, and picking input.
+    // All ImGui panels live in EditorUI, which drives the operations exposed here.
     class Editor : public Application {
     public:
         explicit Editor(Engine* inEngine);
@@ -49,6 +30,26 @@ namespace ytail
         void eventTick(const SDL_Event& event) override;
         void tick(float deltaTime) override;
         void uiTick() override;
+
+        // --- Operations the editor UI drives ---
+        [[nodiscard]] Engine* getEngine() const { return engine; }
+        [[nodiscard]] const std::string& getCurrentScenePath() const { return currentScenePath; }
+        // entity id of the editor fly camera, so the UI can refuse to delete it (0 before start).
+        [[nodiscard]] Uint32 getEditorCameraId() const { return editorCameraId; }
+        // SDL tick (ms) of the last successful scene save this session; 0 = not saved yet.
+        [[nodiscard]] Uint64 getLastSaveTick() const { return lastSaveTick; }
+
+        // Load a scene from an assets-relative path: rebuild the fly cam, keep its pose,
+        // clear selection, and adopt the path as the current scene.
+        void openScene(const std::string& path);
+        // Write the current scene back to its path.
+        void saveCurrentScene();
+        // Write the current scene to a new path and adopt it on success.
+        bool saveSceneAs(const std::string& path);
+
+        // Snapshot the live scene and simulate (Play) / restore it and pause (Stop).
+        void play();
+        void stop();
 
     protected:
         void handleInput(const SDL_KeyboardEvent& keyboard_event);
@@ -64,52 +65,12 @@ namespace ytail
         // Scene state captured on Play, restored on Stop so simulation edits can be undone.
         std::unique_ptr<nlohmann::json> playSnapshot;
 
-        // pick the nearest mesh under a window pixel and select it (0 = nothing hit)
-        void selectAtScreen(float screenX, float screenY);
+        // Assets-relative path of the scene currently being edited; target of Save/Reload.
+        std::string currentScenePath = "scenes/main.scene.json";
+        // When the scene was last saved (SDL ticks, ms); 0 until the first save.
+        Uint64 lastSaveTick = 0;
 
-        // change selection in the editor (changes outline too)
-        void setSelected(Uint32 id);
-
-        // one entity row in the outliner tree, recursing into its children
-        void drawOutlinerNode(Entity* entity);
-
-        // inspector combo to set the selected entity's parent
-        void drawParentSelector(Entity* entity);
-
-        // mesh + material slot pickers shown under a RenderComponent in the inspector
-        void drawRenderComponentAssets(RenderComponent* render);
-
-        // floating window to author and save .mat files
-        void drawMaterialEditor();
-        // write / read materialDef to the .mat file at materialPath
-        void saveMaterialDef();
-        void loadMaterialDef();
-
-        // transform gizmo for the current selection
-        void drawGizmo();
-
-        // "Entity / Collider N" picker for what the gizmo edits on a rigidbody
-        void drawColliderGizmoTarget(RigidbodyComponent* rb);
-
-        // id of the entity shown in the inspector; 0 = none (ids start at 1)
-        Uint32 selectedEntity = 0;
-
-        // which collider the gizmo edits on the selection; -1 = the entity transform
-        int selectedCollider = -1;
-
-        ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
-        ImGuizmo::MODE gizmoMode = ImGuizmo::WORLD;
-
-        // snap step for gizmos
-        bool gizmoSnap = false;
-        float snapTranslate = 1.0f;
-        float snapRotateDegrees = 15.0f;
-        float snapScale = 0.1f;
-
-        // Material editor window state
-        bool showMaterialEditor = false;
-        MaterialDef materialDef;
-        std::string materialPath = "materials/new.mat";
+        EditorUI ui;
     };
 } // ytail
 

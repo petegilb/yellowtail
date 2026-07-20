@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include <SDL3/SDL.h>
 #include <nlohmann/json_fwd.hpp>
 
 namespace ytail {
@@ -21,6 +22,11 @@ namespace ytail {
     bool saveScene(const Engine& engine, const std::string& path);
     // Clear the scene and rebuild it from the .json file at the given assets-relative path.
     bool loadScene(Engine& engine, const std::string& path);
+
+    // Deep-copy an entity (and its whole child subtree) into the live scene via a
+    // serialize round-trip, keeping the source's parent. Returns the new root entity's
+    // id, or 0 on failure.
+    Uint32 duplicateEntity(Engine& engine, Uint32 sourceId);
 } // ytail
 
 #endif //YELLOWTAIL_SCENESERIALIZER_H
