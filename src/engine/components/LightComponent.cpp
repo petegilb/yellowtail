@@ -15,6 +15,7 @@ namespace ytail {
         ar("color", color);
         ar("intensity", intensity);
         ar("attenuation", attenuation);
+        ar("castsShadows", castsShadows);
     }
 
     void LightComponent::drawInspector() {
@@ -29,6 +30,8 @@ namespace ytail {
 
         if (type == LightType::Point) {
             ImGui::DragFloat("Attenuation", &attenuation, 0.1f, 0.0f, 1000.0f);
+        } else if (type == LightType::Directional) {
+            ImGui::Checkbox("Casts Shadows", &castsShadows);
         }
     }
 } // ytail

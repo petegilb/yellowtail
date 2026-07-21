@@ -10,9 +10,9 @@
       "components": [
         {
           "position": [
-            1.1999984979629517,
-            5.100924968719482,
-            3.2887380123138428
+            0.0,
+            5.0,
+            -1.4901161193847656e-08
           ],
           "rotation": [
             0.0,
@@ -28,81 +28,42 @@
           "type": "transform"
         },
         {
-          "color": [
-            1.0,
-            1.0,
-            1.0
+          "bodyType": "Dynamic",
+          "colliders": [
+            {
+              "halfExtents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "halfHeight": 0.5,
+              "offset": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "radius": 1.0,
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "shape": "Sphere"
+            }
           ],
-          "intensity": 1.0,
-          "type": "light"
-        }
-      ],
-      "id": 1,
-      "name": "Light1"
-    },
-    {
-      "components": [
-        {
-          "position": [
-            4.218435287475586,
-            2.2525999546051025,
-            0.6766574382781982
-          ],
-          "rotation": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "scale": [
-            0.5,
-            0.5,
-            0.5
-          ],
-          "type": "transform"
+          "type": "rigidbody"
         },
         {
           "materials": [
-            "materials/crate.mat"
+            "materials/sphere.mat"
           ],
-          "mesh": "models/cube.glb",
+          "mesh": "models/sphere.glb",
           "type": "render"
         }
       ],
-      "id": 2,
-      "name": "Cube"
-    },
-    {
-      "components": [
-        {
-          "position": [
-            2.0,
-            2.3886988162994385,
-            -5.0
-          ],
-          "rotation": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "scale": [
-            1.0,
-            1.0,
-            1.0
-          ],
-          "type": "transform"
-        },
-        {
-          "materials": [
-            "materials/crate.mat"
-          ],
-          "mesh": "models/cube.glb",
-          "type": "render"
-        }
-      ],
-      "id": 3,
-      "name": "Cube2"
+      "id": 5,
+      "name": "Sphere"
     },
     {
       "components": [
@@ -167,9 +128,9 @@
       "components": [
         {
           "position": [
-            0.0,
-            5.0,
-            -1.4901161193847656e-08
+            2.0,
+            2.3886988162994385,
+            -5.0
           ],
           "rotation": [
             0.0,
@@ -185,13 +146,121 @@
           "type": "transform"
         },
         {
+          "materials": [
+            "materials/crate.mat"
+          ],
+          "mesh": "models/cube.glb",
+          "type": "render"
+        }
+      ],
+      "id": 3,
+      "name": "Cube2"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            6.001573085784912,
+            2.2525999546051025,
+            0.6766574382781982
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "type": "transform"
+        },
+        {
+          "materials": [
+            "materials/crate.mat"
+          ],
+          "mesh": "models/cube.glb",
+          "type": "render"
+        }
+      ],
+      "id": 2,
+      "name": "Cube"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            1.1999984979629517,
+            5.100924968719482,
+            3.2887380123138428
+          ],
+          "rotation": [
+            -0.386865496635437,
+            0.1238631010055542,
+            0.03361600264906883,
+            0.9131609797477722
+          ],
+          "scale": [
+            0.999993622303009,
+            0.9999939203262329,
+            0.9999952912330627
+          ],
+          "type": "transform"
+        },
+        {
+          "attenuation": 10.0,
+          "castsShadows": true,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 1.0,
+          "lightType": 1,
+          "type": "light"
+        }
+      ],
+      "id": 1,
+      "name": "Light1"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            0.37128710746765137,
+            14.36430835723877,
+            0.5345581769943237
+          ],
+          "rotation": [
+            -0.20186717808246613,
+            -0.2311588078737259,
+            -0.2743065655231476,
+            0.9113567471504211
+          ],
+          "scale": [
+            0.9999975562095642,
+            0.9999969601631165,
+            0.9999954700469971
+          ],
+          "type": "transform"
+        },
+        {
+          "materials": [
+            "materials/crate.mat"
+          ],
+          "mesh": "models/cube.glb",
+          "type": "render"
+        },
+        {
           "bodyType": "Dynamic",
           "colliders": [
             {
               "halfExtents": [
-                0.5,
-                0.5,
-                0.5
+                1.0,
+                1.0,
+                1.0
               ],
               "halfHeight": 0.5,
               "offset": [
@@ -199,28 +268,21 @@
                 0.0,
                 0.0
               ],
-              "radius": 1.0,
+              "radius": 0.5,
               "rotation": [
                 0.0,
                 0.0,
                 0.0,
                 1.0
               ],
-              "shape": "Sphere"
+              "shape": "Box"
             }
           ],
           "type": "rigidbody"
-        },
-        {
-          "materials": [
-            "materials/sphere.mat"
-          ],
-          "mesh": "models/sphere.glb",
-          "type": "render"
         }
       ],
-      "id": 5,
-      "name": "Sphere"
+      "id": 7,
+      "name": "Cube1"
     }
   ],
   "version": 1

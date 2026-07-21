@@ -46,6 +46,16 @@ namespace ytail {
     static_assert(sizeof(FrameLightingUniform) == 32 + 48 * FrameLightingUniform::MaxLights,
                   "FrameLightingUniform must match the b0 cbuffer layout");
 
+    // Mirrors cbuffer Shadow in BlinnPhongLit.frag.hlsl (b2, space3). Pushed once per frame.
+    struct ShadowUniform {
+        glm::mat4 lightViewProj;     // world → sun clip space
+        float shadowBias = 0.0005f;  // depth-compare bias, fights acne
+        int shadowEnabled = 0;       // 0 = skip shadow sampling
+        float texelSize = 0.0f;      // 1 / shadowMapSize, PCF tap spacing
+        float _pad0 = 0.0f;
+    };
+    static_assert(sizeof(ShadowUniform) == 80, "ShadowUniform must match the b2 cbuffer layout");
+
     class RenderComponent : public Component {
 public:
         std::vector<std::shared_ptr<Material>> materials;

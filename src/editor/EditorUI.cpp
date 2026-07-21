@@ -660,6 +660,26 @@ namespace ytail
             ImGui::EndPopup();
         }
 
+        // Shadows dropdown: toggle the sun shadow map and tune its frustum / bias.
+        ImGui::SameLine(0.0f, 20.0f);
+        if (ImGui::Button("Shadows")) ImGui::OpenPopup("ShadowMenu");
+        if (ImGui::BeginPopup("ShadowMenu")) {
+            ImGui::Checkbox("Show Shadows", &engine->showShadows);
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Ortho Extent", &engine->shadowOrthoExtent, 0.5f, 1.0f, 500.0f, "%.1f");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Distance", &engine->shadowDistance, 0.5f, 1.0f, 1000.0f, "%.1f");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Near", &engine->shadowNear, 0.1f, 0.01f, 100.0f, "%.2f");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Far", &engine->shadowFar, 1.0f, 1.0f, 2000.0f, "%.1f");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Bias", &engine->shadowBias, 0.00005f, 0.0f, 0.02f, "%.5f");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat3("Focus", &engine->shadowFocus.x, 0.5f);
+            ImGui::EndPopup();
+        }
+
         ImGui::SameLine(0.0f, 20.0f);
         if (ImGui::Button("Material Editor")) showMaterialEditor = !showMaterialEditor;
         ImGui::End();

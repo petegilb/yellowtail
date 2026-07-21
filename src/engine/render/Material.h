@@ -24,6 +24,7 @@ namespace ytail {
         DebugLine,
         Grid,
         Billboard,
+        ShadowDepth,
         Count
     };
 
@@ -45,6 +46,7 @@ namespace ytail {
         LinearWrap,
         AnisotropicClamp,
         AnisotropicWrap,
+        ShadowPCF,
         Count
     };
 

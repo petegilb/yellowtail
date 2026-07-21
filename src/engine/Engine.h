@@ -68,6 +68,9 @@ namespace ytail {
         // Create (or resize) the depth+stencil texture to match the given pixel size.
         void ensureDepthTexture(int width, int height);
 
+        // Create (or resize) the square, sampleable shadow-map depth texture.
+        void ensureShadowMapTexture(int size);
+
         // Offscreen scene color target the geometry pass renders into (scaled res, blitted to swapchain).
         void ensureSceneColorTexture(int width, int height);
 
@@ -136,6 +139,15 @@ namespace ytail {
 
         // Editor billboard icons for lights and inactive cameras (camera-facing sprites).
         bool showEditorIcons = false;
+
+        // Directional (sun) shadow map. The first directional light with castsShadows drives it.
+        bool showShadows = false;
+        float shadowOrthoExtent = 40.0f;  // half-size of the ortho box, world units
+        float shadowDistance = 50.0f;     // how far back along -direction the light sits
+        float shadowNear = 1.0f;
+        float shadowFar = 150.0f;
+        float shadowBias = 0.0005f;
+        glm::vec3 shadowFocus{0.0f};      // world point the shadow box is centered on
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;
@@ -153,6 +165,14 @@ namespace ytail {
         SDL_GPUTexture* sceneColorTexture = nullptr;
         int sceneColorW = 0;
         int sceneColorH = 0;
+
+        // Sun shadow-map depth target (sampleable), rendered from the caster's POV.
+        SDL_GPUTexture* shadowMapTexture = nullptr;
+        int shadowMapSize = 2048;         // desired resolution, tunable in the editor
+        int shadowMapCurrentSize = 0;     // resolution the current texture was created at
+
+        // Light-space view*proj for the first directional shadow caster. False if none casts.
+        [[nodiscard]] bool computeSunLightMatrix(glm::mat4& outLightViewProj) const;
 
         // Recorded so a present-mode change re-applies the same composition
         SDL_GPUSwapchainComposition swapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR;

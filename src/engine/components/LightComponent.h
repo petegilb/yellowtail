@@ -22,6 +22,8 @@ public:
         float intensity{1.f};
         // Point-light attenuation radius in world units
         float attenuation{10.f};
+        // Directional lights only: the first one with this set drives the shadow map.
+        bool castsShadows{false};
 
         static constexpr const char* SerialId = "light";
         void serialize(Archive& ar) override;

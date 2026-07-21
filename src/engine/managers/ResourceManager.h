@@ -51,6 +51,9 @@ public:
         // per-frame depth buffer so the texture and the pipelines agree on the format.
         [[nodiscard]] SDL_GPUTextureFormat getDepthStencilFormat() const { return depthStencilFormat; }
 
+        // Sampleable depth format for the shadow map (rendered to, then sampled by the lit shader).
+        [[nodiscard]] SDL_GPUTextureFormat getShadowMapFormat() const { return shadowMapFormat; }
+
         // Turn an assets-relative path into an absolute path next to the executable.
         [[nodiscard]] std::string resolveAssetPath(const std::string& path) const {
             return std::string(BasePath) + "assets/" + path;
@@ -64,6 +67,9 @@ public:
         // Set in the constructor to a device-supported depth+stencil format (stencil is
         // required for the outline mask). Prefers D24_S8, falls back to D32_S8.
         SDL_GPUTextureFormat depthStencilFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT;
+
+        // Device-supported sampleable depth format. Prefers D32_FLOAT, falls back to D16_UNORM.
+        SDL_GPUTextureFormat shadowMapFormat = SDL_GPU_TEXTUREFORMAT_D16_UNORM;
 
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
         std::unordered_map<std::string, std::shared_ptr<Mesh>> meshes;

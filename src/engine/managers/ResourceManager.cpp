@@ -26,6 +26,14 @@ namespace ytail {
             depthStencilFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT;
         }
 
+        // Sampleable depth format for the shadow map. Prefer D32_FLOAT, fall back to D16_UNORM.
+        if (SDL_GPUTextureSupportsFormat(device, SDL_GPU_TEXTUREFORMAT_D32_FLOAT, SDL_GPU_TEXTURETYPE_2D,
+                SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+            shadowMapFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+        } else {
+            shadowMapFormat = SDL_GPU_TEXTUREFORMAT_D16_UNORM;
+        }
+
         initializeSamplers();
         initializePipelines();
     }
@@ -528,6 +536,13 @@ namespace ytail {
             info.target_info.depth_stencil_format = depthStencilFormat;
         }
 
+        // Depth-only pipeline (shadow pass): no color target, its own depth format.
+        void depthOnly(SDL_GPUTextureFormat shadowFormat) {
+            info.target_info.color_target_descriptions = nullptr;
+            info.target_info.num_color_targets = 0;
+            info.target_info.depth_stencil_format = shadowFormat;
+        }
+
         // Standard straight-alpha blend on the color target.
         void enableAlphaBlend() {
             colorTarget.blend_state.enable_blend = true;
@@ -561,10 +576,10 @@ namespace ytail {
 
         { // LitStatic
             // vertex : 1 uniform buffer (Camera @ b0 space1)
-            // fragment : 2 samplers (diffuse t0, specular t1) + 2 uniform buffers
-            // (FrameLighting b0 space3, Material b1 space3)
+            // fragment : 3 samplers (diffuse t0, specular t1, shadow t2) + 3 uniform buffers
+            // (FrameLighting b0 space3, Material b1 space3, Shadow b2 space3)
             SDL_GPUShader* vs = loadShader(device, "BlinnPhongLit.vert", 0, 1, 0, 0);
-            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 2, 2, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 3, 3, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load LitStatic shaders");
                 return;
@@ -585,7 +600,7 @@ namespace ytail {
         // outline pass reads it as a ring rather than filling the occluded region.
         { // LitStaticStencil
             SDL_GPUShader* vs = loadShader(device, "BlinnPhongLit.vert", 0, 1, 0, 0);
-            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 2, 2, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 3, 3, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load LitStaticStencil shaders");
                 return;
@@ -743,6 +758,27 @@ namespace ytail {
             SDL_ReleaseGPUShader(device, fs);
         }
 
+        // Shadow pass: scene depth from the sun's POV into a depth-only target. Reuses the Mesh
+        // layout (position only); the fragment shader is a no-op.
+        // vertex   : 1 uniform buffer (LightMVP @ b0 space1 = lightViewProj * model)
+        // fragment : none
+        { // ShadowDepth
+            SDL_GPUShader* vs = loadShader(device, "ShadowDepth.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "Empty.frag", 0, 0, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load ShadowDepth shaders");
+                return;
+            }
+
+            // Front-face cull writes casters' back faces, keeping self-shadow acne off the lit side.
+            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_FRONT;
+            builder.depthOnly(shadowMapFormat);
+            pipelines[static_cast<size_t>(PipelineType::ShadowDepth)] = createPipeline(device, builder, "ShadowDepth");
+
+            SDL_ReleaseGPUShader(device, vs);
+            SDL_ReleaseGPUShader(device, fs);
+        }
     }
 
     void ResourceManager::initializeSamplers() {
@@ -806,5 +842,18 @@ namespace ytail {
         anisoWrap.max_anisotropy = 4;
         anisoWrap.enable_anisotropy = true;
         samplers[static_cast<size_t>(SamplerType::AnisotropicWrap)] = SDL_CreateGPUSampler(device, &anisoWrap);
+
+        // Shadow comparison sampler: linear + compare gives hardware 2x2 PCF; clamp so out-of-
+        // frustum lookups sample the border. LESS_OR_EQUAL matches the stored depth test.
+        SDL_GPUSamplerCreateInfo shadowPcf = {};
+        shadowPcf.min_filter = SDL_GPU_FILTER_LINEAR;
+        shadowPcf.mag_filter = SDL_GPU_FILTER_LINEAR;
+        shadowPcf.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+        shadowPcf.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        shadowPcf.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        shadowPcf.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        shadowPcf.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+        shadowPcf.enable_compare = true;
+        samplers[static_cast<size_t>(SamplerType::ShadowPCF)] = SDL_CreateGPUSampler(device, &shadowPcf);
     }
 } // ytail

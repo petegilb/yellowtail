@@ -58,6 +58,7 @@ namespace ytail {
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
         if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
         if (device && sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
+        if (device && shadowMapTexture) SDL_ReleaseGPUTexture(device, shadowMapTexture);
 
         GameplayStatics::engine = nullptr;
 
@@ -273,6 +274,52 @@ namespace ytail {
         if (depthTexture == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create depth texture: %s", SDL_GetError());
         }
+    }
+
+    void Engine::ensureShadowMapTexture(int size) {
+        if (shadowMapTexture && shadowMapCurrentSize == size) return;
+        if (shadowMapTexture) SDL_ReleaseGPUTexture(device, shadowMapTexture);
+
+        SDL_GPUTextureCreateInfo info = {};
+        info.type                 = SDL_GPU_TEXTURETYPE_2D;
+        // Sampleable depth: written by the shadow pass, read by the lit shader.
+        info.format               = resourceManager->getShadowMapFormat();
+        info.usage                = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        info.width                = static_cast<Uint32>(size);
+        info.height               = static_cast<Uint32>(size);
+        info.layer_count_or_depth = 1;
+        info.num_levels           = 1;
+        shadowMapTexture = SDL_CreateGPUTexture(device, &info);
+        shadowMapCurrentSize = size;
+        if (shadowMapTexture == nullptr) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create shadow map texture: %s", SDL_GetError());
+        }
+    }
+
+    bool Engine::computeSunLightMatrix(glm::mat4& outLightViewProj) const {
+        // First directional light flagged to cast shadows drives the map.
+        for (const auto& [id, entity] : entities) {
+            if (entity == nullptr) continue;
+            const auto* light = entity->getComponent<LightComponent>();
+            const auto* transform = entity->getComponent<TransformComponent>();
+            if (light == nullptr || transform == nullptr) continue;
+            if (light->type != LightType::Directional || !light->castsShadows) continue;
+
+            // -Z rotated into world space (same as the lit path).
+            const glm::vec3 dir = glm::normalize(transform->rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+            // Sit the light back along -dir from the focus and look toward it.
+            const glm::vec3 eye = shadowFocus - dir * shadowDistance;
+            // Avoid a degenerate up vector when the sun points nearly straight down.
+            const glm::vec3 up = (std::abs(dir.y) > 0.99f) ? glm::vec3(0.0f, 0.0f, 1.0f)
+                                                           : glm::vec3(0.0f, 1.0f, 0.0f);
+            const glm::mat4 lightView = glm::lookAt(eye, shadowFocus, up);
+            const glm::mat4 lightProj = glm::ortho(-shadowOrthoExtent, shadowOrthoExtent,
+                                                   -shadowOrthoExtent, shadowOrthoExtent,
+                                                   shadowNear, shadowFar);
+            outLightViewProj = lightProj * lightView;
+            return true;
+        }
+        return false;
     }
 
     void Engine::getRenderTargetSize(int& outWidth, int& outHeight) const {
@@ -526,6 +573,51 @@ namespace ytail {
             gizmoLineRenderer->upload(commandBuffer, gizmos.vertices());
         }
 
+        // Render scene depth from the sun's POV so the scene pass can sample it. The map is always
+        // bound at slot 2; shadowEnabled (below) gates whether the shader actually reads it.
+        glm::mat4 lightViewProj(1.0f);
+        const bool hasShadowCaster = showShadows && computeSunLightMatrix(lightViewProj);
+        ensureShadowMapTexture(shadowMapSize);
+        if (hasShadowCaster) {
+            SDL_GPUDepthStencilTargetInfo shadowTargetInfo = {};
+            shadowTargetInfo.texture          = shadowMapTexture;
+            shadowTargetInfo.clear_depth      = 1.0f;
+            shadowTargetInfo.load_op          = SDL_GPU_LOADOP_CLEAR;
+            shadowTargetInfo.store_op         = SDL_GPU_STOREOP_STORE;  // sampled in the scene pass
+            shadowTargetInfo.stencil_load_op  = SDL_GPU_LOADOP_DONT_CARE;
+            shadowTargetInfo.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+            shadowTargetInfo.cycle            = true;
+
+            SDL_GPURenderPass* shadowPass = SDL_BeginGPURenderPass(commandBuffer, nullptr, 0, &shadowTargetInfo);
+            SDL_GPUGraphicsPipeline* shadowPipeline = resourceManager->getPipeline(PipelineType::ShadowDepth);
+            if (shadowPipeline) {
+                SDL_BindGPUGraphicsPipeline(shadowPass, shadowPipeline);
+                for (const auto& [idx, entity] : entities) {
+                    if (entity == nullptr) continue;
+                    const auto* renderComponent = entity->getComponent<RenderComponent>();
+                    const auto* transformComponent = entity->getComponent<TransformComponent>();
+                    if (renderComponent == nullptr || transformComponent == nullptr) continue;
+                    const auto& mesh = renderComponent->mesh;
+                    if (!mesh) continue;
+
+                    SDL_GPUBufferBinding vertexBinding { .buffer = mesh->vertexBuffer, .offset = 0 };
+                    SDL_GPUBufferBinding indexBinding { .buffer = mesh->indexBuffer, .offset = 0 };
+                    SDL_BindGPUVertexBuffers(shadowPass, 0, &vertexBinding, 1);
+                    SDL_BindGPUIndexBuffer(shadowPass, &indexBinding, mesh->indexSize);
+
+                    const glm::mat4 lightMvp = lightViewProj * transformComponent->worldMatrix();
+                    SDL_PushGPUVertexUniformData(commandBuffer, 0, &lightMvp, sizeof(lightMvp));
+
+                    for (const Submesh& submesh : mesh->submeshes) {
+                        SDL_DrawGPUIndexedPrimitives(shadowPass, submesh.indexCount, 1,
+                            submesh.indexOffset, 0, 0);
+                        drawCallsLastFrame++;
+                    }
+                }
+            }
+            SDL_EndGPURenderPass(shadowPass);
+        }
+
         // Depth+stencil attachment for the geometry pass. Depth clears to the far plane (1.0);
         // stencil clears to 0. Neither is needed after the frame, so we don't store them.
         // https://github.com/TheSpydog/SDL_gpu_examples/blob/main/Examples/DepthArray.c
@@ -570,6 +662,21 @@ namespace ytail {
         }
         frameLighting.lightCount = lightCount;
         SDL_PushGPUFragmentUniformData(commandBuffer, 0, &frameLighting, sizeof(frameLighting));
+
+        // Push the shadow matrix/params (frag slot 2) and bind the map (sampler slot 2) once for
+        // every lit draw. Materials only touch slots 0-1, so these persist across the loop.
+        ShadowUniform shadowUniform{};
+        shadowUniform.lightViewProj = lightViewProj;
+        shadowUniform.shadowBias    = shadowBias;
+        shadowUniform.shadowEnabled = hasShadowCaster ? 1 : 0;
+        shadowUniform.texelSize     = 1.0f / static_cast<float>(shadowMapSize);
+        SDL_PushGPUFragmentUniformData(commandBuffer, 2, &shadowUniform, sizeof(shadowUniform));
+
+        SDL_GPUTextureSamplerBinding shadowBinding{
+            .texture = shadowMapTexture,
+            .sampler = resourceManager->getSampler(SamplerType::ShadowPCF)
+        };
+        SDL_BindGPUFragmentSamplers(renderPass, 2, &shadowBinding, 1);
 
         // for each render component and transform component, get the mesh and the material in order to render it
         // TODO optimize this by pipeline binding (rebinding the same pipeline multiple times is a waste of resources)

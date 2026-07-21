@@ -10,6 +10,9 @@ Texture2D    diffuseTex  : register(t0, space2);
 SamplerState diffuseSmp  : register(s0, space2);
 Texture2D    specularTex : register(t1, space2);
 SamplerState specularSmp : register(s1, space2);
+// Shadow map (sun depth) + its comparison sampler for hardware Percentage-Closer Filtering
+Texture2D              shadowTex : register(t2, space2);
+SamplerComparisonState shadowSmp : register(s2, space2);
 
 #define MAX_LIGHTS 16
 #define LIGHT_POINT       0
@@ -41,6 +44,45 @@ cbuffer Material : register(b1, space3)
     float2 uvOffset;
     float  shininess;
 };
+
+// Must match ShadowUniform in RenderComponent.h.
+cbuffer Shadow : register(b2, space3)
+{
+    float4x4 lightViewProj; // world -> sun clip space
+    float shadowBias;       // depth-compare bias (fights acne)
+    int   shadowEnabled;    // 0 = no caster this frame; skip the sample
+    float texelSize;        // 1 / shadowMapSize, PCF tap spacing
+    float _padShadow;
+};
+
+// 0 = shadowed, 1 = lit. 3x3 PCF.
+float sampleShadow(float3 worldPos, float NdotL)
+{
+    float4 lightClip = mul(lightViewProj, float4(worldPos, 1.0f));
+    // Ortho w == 1, but divide anyway in case the projection changes.
+    float3 proj = lightClip.xyz / lightClip.w;
+
+    // Clip xy [-1,1] -> uv [0,1], y flipped for the top-left texture origin.
+    float2 uv = proj.xy * float2(0.5f, -0.5f) + 0.5f;
+    float fragDepth = proj.z;
+
+    // Outside the light frustum: nothing to occlude, treat as lit.
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f || fragDepth > 1.0f)
+        return 1.0f;
+
+    // Slope-scaled bias: grazing angles need more to avoid acne.
+    float bias = max(shadowBias * (1.0f - NdotL), shadowBias * 0.1f);
+    float compareDepth = fragDepth - bias;
+
+    float sum = 0.0f;
+    // unroll is a compiler hint expand the loops into 9 straight-line SampleCmp calls
+    // shadowSmp is a comparison sampler with a linear filter, each call returns a value in [0, 1]
+    // level 0 is the biggest mipmap (there's no mipmaps tho)
+    [unroll] for (int y = -1; y <= 1; ++y)
+        [unroll] for (int x = -1; x <= 1; ++x)
+            sum += shadowTex.SampleCmpLevelZero(shadowSmp, uv + float2(x, y) * texelSize, compareDepth);
+    return sum / 9.0f;
+}
 
 float4 main(Input input) : SV_Target
 {
@@ -86,7 +128,12 @@ float4 main(Input input) : SV_Target
         float  spec     = pow(max(dot(norm, halfway), 0.0f), shininess);
         float3 specular = light.color * spec * specularColor;
 
-        result += (diffuse + specular) * attenuation;
+        // Only the sun (a directional light) casts the shadow map this frame.
+        float shadow = 1.0f;
+        if (light.type == LIGHT_DIRECTIONAL && shadowEnabled != 0)
+            shadow = sampleShadow(input.fragPos, diff);
+
+        result += (diffuse + specular) * attenuation * shadow;
     }
 
     return float4(result, 1.0f);

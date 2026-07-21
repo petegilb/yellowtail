@@ -34,6 +34,7 @@ namespace ytail
         engine->showGrid = true;
         engine->showLightGizmos = true;
         engine->showEditorIcons = true;
+        engine->showShadows = true;
 
         loadScene(*engine, currentScenePath);
         createEditorCamera();
