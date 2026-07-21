@@ -464,6 +464,94 @@ namespace ytail {
         return shader;
     }
 
+    // The two vertex formats our pipelines consume.
+    enum class VertexLayout {
+        Mesh,  // Vertex: vec3 position, vec3 normal, vec2 uv
+        Line,  // JoltDebugVertex: vec3 position, vec4 color
+    };
+
+    // Fills a SDL_GPUGraphicsPipelineCreateInfo with the defaults every pipeline here shares:
+    // one swapchain-format color target, a single depth+stencil target, opaque depth test+write
+    // (LESS), triangle list, back-face cull, CCW winding. Callers override info.* for anything
+    // else (primitive, cull, depth, stencil, ...) and can call enableAlphaBlend() for the common
+    // translucent case. Owns the structs info points at, so keep it alive until createPipeline().
+    struct PipelineBuilder {
+        SDL_GPUVertexBufferDescription vbDesc{};
+        SDL_GPUVertexAttribute attributes[3]{};
+        SDL_GPUColorTargetDescription colorTarget{};
+        SDL_GPUGraphicsPipelineCreateInfo info{};
+
+        PipelineBuilder(const PipelineBuilder&) = delete;
+        PipelineBuilder& operator=(const PipelineBuilder&) = delete;
+
+        PipelineBuilder(SDL_GPUDevice* device, SDL_Window* window,
+                        SDL_GPUShader* vertexShader, SDL_GPUShader* fragmentShader,
+                        VertexLayout layout, SDL_GPUTextureFormat depthStencilFormat) {
+            vbDesc.slot = 0;
+            vbDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+            vbDesc.instance_step_rate = 0;
+
+            Uint32 attrCount = 0;
+            if (layout == VertexLayout::Mesh) {
+                vbDesc.pitch = sizeof(Vertex);
+                attributes[0] = { 0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(Vertex, position) };
+                attributes[1] = { 1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(Vertex, normal) };
+                attributes[2] = { 2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(Vertex, uv) };
+                attrCount = 3;
+            } else {
+                vbDesc.pitch = sizeof(JoltDebugVertex);
+                attributes[0] = { 0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(JoltDebugVertex, position) };
+                attributes[1] = { 1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(JoltDebugVertex, color) };
+                attrCount = 2;
+            }
+
+            info.vertex_shader = vertexShader;
+            info.fragment_shader = fragmentShader;
+            info.vertex_input_state.vertex_buffer_descriptions = &vbDesc;
+            info.vertex_input_state.num_vertex_buffers = 1;
+            info.vertex_input_state.vertex_attributes = attributes;
+            info.vertex_input_state.num_vertex_attributes = attrCount;
+
+            info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+            info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+            info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
+            info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE; // gltf winding
+
+            info.depth_stencil_state.enable_depth_test = true;
+            info.depth_stencil_state.enable_depth_write = true;
+            info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS;
+
+            colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device, window);
+            info.target_info.color_target_descriptions = &colorTarget;
+            info.target_info.num_color_targets = 1;
+            info.target_info.has_depth_stencil_target = true;
+            info.target_info.depth_stencil_format = depthStencilFormat;
+        }
+
+        // Standard straight-alpha blend on the color target.
+        void enableAlphaBlend() {
+            colorTarget.blend_state.enable_blend = true;
+            colorTarget.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+            colorTarget.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+            colorTarget.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+            colorTarget.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+            colorTarget.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+            colorTarget.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        }
+    };
+
+    // Create the pipeline, logging (but not aborting) on failure so one bad pipeline doesn't
+    // silently look like a crash.
+    static SDL_GPUGraphicsPipeline* createPipeline(SDL_GPUDevice* device, PipelineBuilder& builder,
+                                                   const char* name) {
+        SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device, &builder.info);
+        if (pipeline == nullptr) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create %s pipeline: %s",
+                         name, SDL_GetError());
+        }
+        return pipeline;
+    }
+
     void ResourceManager::initializePipelines() {
         SDL_Log("initializePipelines");
         // need to set pipeline SDL_GPUFrontFace to SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE to match GLTF
@@ -472,80 +560,22 @@ namespace ytail {
 
 
         { // LitStatic
-            // load shaders
-            // vertex : 1 uniform buffer  (Camera cbuffer @ b0 space1)
+            // vertex : 1 uniform buffer (Camera @ b0 space1)
             // fragment : 2 samplers (diffuse t0, specular t1) + 2 uniform buffers
             // (FrameLighting b0 space3, Material b1 space3)
-            SDL_GPUShader* vertexShader   = loadShader(device, "BlinnPhongLit.vert", 0,
-                1, 0, 0);
-            SDL_GPUShader* fragmentShader = loadShader(device, "BlinnPhongLit.frag", 2,
-                2, 0, 0);
-            if (vertexShader == nullptr || fragmentShader == nullptr) {
+            SDL_GPUShader* vs = loadShader(device, "BlinnPhongLit.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 2, 2, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load LitStatic shaders");
                 return;
             }
 
-            // Vertex layout - must match the Vertex struct (vec3 position, vec3 normal, vec2 uv).
-            SDL_GPUVertexBufferDescription vbDesc = {};
-            vbDesc.slot = 0;
-            vbDesc.pitch = sizeof(Vertex);
-            vbDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-            vbDesc.instance_step_rate = 0;
+            // Pure defaults: opaque, depth test+write, back-face cull.
+            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+            pipelines[static_cast<size_t>(PipelineType::LitStatic)] = createPipeline(device, builder, "LitStatic");
 
-            SDL_GPUVertexAttribute attributes[3] = {};
-            attributes[0].location = 0;  // position -> TEXCOORD0
-            attributes[0].buffer_slot = 0;
-            attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[0].offset = offsetof(Vertex, position);
-            attributes[1].location = 1;  // normal -> TEXCOORD1
-            attributes[1].buffer_slot = 0;
-            attributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[1].offset = offsetof(Vertex, normal);
-            attributes[2].location = 2;  // uv -> TEXCOORD2
-            attributes[2].buffer_slot = 0;
-            attributes[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
-            attributes[2].offset = offsetof(Vertex, uv);
-
-            SDL_GPUVertexInputState vertexInput = {};
-            vertexInput.vertex_buffer_descriptions = &vbDesc;
-            vertexInput.num_vertex_buffers = 1;
-            vertexInput.vertex_attributes = attributes;
-            vertexInput.num_vertex_attributes = 3;
-
-            // Color target = the window's swapchain format.
-            SDL_GPUColorTargetDescription colorTarget = {};
-            colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device, window);
-
-            SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {};
-            pipelineCreateInfo.vertex_shader = vertexShader;
-            pipelineCreateInfo.fragment_shader = fragmentShader;
-            pipelineCreateInfo.vertex_input_state = vertexInput;
-            pipelineCreateInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-            pipelineCreateInfo.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-            pipelineCreateInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
-            pipelineCreateInfo.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE; // like gltf winding
-
-            // Standard z-buffer, no stencil. Only outlined objects touch the stencil buffer,
-            // and they use LitStaticStencil instead.
-            pipelineCreateInfo.depth_stencil_state.enable_depth_test = true;
-            pipelineCreateInfo.depth_stencil_state.enable_depth_write = true;
-            pipelineCreateInfo.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS;
-
-            pipelineCreateInfo.target_info.color_target_descriptions = &colorTarget;
-            pipelineCreateInfo.target_info.num_color_targets = 1;
-            pipelineCreateInfo.target_info.has_depth_stencil_target = true;
-            pipelineCreateInfo.target_info.depth_stencil_format = depthStencilFormat;
-
-            // create pipeline
-            SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipelineCreateInfo);
-            if (pipeline == nullptr) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create LitStatic pipeline: %s", SDL_GetError());
-            }
-            pipelines[static_cast<size_t>(PipelineType::LitStatic)] = pipeline;
-
-            // unload shaders
-            SDL_ReleaseGPUShader(device, vertexShader);
-            SDL_ReleaseGPUShader(device, fragmentShader);
+            SDL_ReleaseGPUShader(device, vs);
+            SDL_ReleaseGPUShader(device, fs);
         }
 
 
@@ -554,83 +584,31 @@ namespace ytail {
         // stamps the full silhouette - including parts hidden behind nearer geometry so the
         // outline pass reads it as a ring rather than filling the occluded region.
         { // LitStaticStencil
-            SDL_GPUShader* vertexShader   = loadShader(device, "BlinnPhongLit.vert", 0,
-                1, 0, 0);
-            SDL_GPUShader* fragmentShader = loadShader(device, "BlinnPhongLit.frag", 2,
-                2, 0, 0);
-            if (vertexShader == nullptr || fragmentShader == nullptr) {
+            SDL_GPUShader* vs = loadShader(device, "BlinnPhongLit.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 2, 2, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load LitStaticStencil shaders");
                 return;
             }
 
-            // Vertex layout - must match the Vertex struct (vec3 position, vec3 normal, vec2 uv).
-            SDL_GPUVertexBufferDescription vbDesc = {};
-            vbDesc.slot = 0;
-            vbDesc.pitch = sizeof(Vertex);
-            vbDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-            vbDesc.instance_step_rate = 0;
+            // Same as LitStatic, but stamp the stencil (ref set to 1 at draw time) for outlined
+            // objects. REPLACE on pass and depth-fail marks the full silhouette, including parts
+            // hidden behind nearer geometry, so the outline pass reads it as a ring.
+            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+            auto& ds = builder.info.depth_stencil_state;
+            ds.enable_stencil_test = true;
+            ds.compare_mask = 0xFF;
+            ds.write_mask = 0xFF;
+            ds.front_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
+            ds.front_stencil_state.pass_op = SDL_GPU_STENCILOP_REPLACE;
+            ds.front_stencil_state.fail_op = SDL_GPU_STENCILOP_KEEP;
+            ds.front_stencil_state.depth_fail_op = SDL_GPU_STENCILOP_REPLACE;
+            ds.back_stencil_state = ds.front_stencil_state;
+            pipelines[static_cast<size_t>(PipelineType::LitStaticStencil)] =
+                createPipeline(device, builder, "LitStaticStencil");
 
-            SDL_GPUVertexAttribute attributes[3] = {};
-            attributes[0].location = 0;  // position -> TEXCOORD0
-            attributes[0].buffer_slot = 0;
-            attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[0].offset = offsetof(Vertex, position);
-            attributes[1].location = 1;  // normal -> TEXCOORD1
-            attributes[1].buffer_slot = 0;
-            attributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[1].offset = offsetof(Vertex, normal);
-            attributes[2].location = 2;  // uv -> TEXCOORD2
-            attributes[2].buffer_slot = 0;
-            attributes[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
-            attributes[2].offset = offsetof(Vertex, uv);
-
-            SDL_GPUVertexInputState vertexInput = {};
-            vertexInput.vertex_buffer_descriptions = &vbDesc;
-            vertexInput.num_vertex_buffers = 1;
-            vertexInput.vertex_attributes = attributes;
-            vertexInput.num_vertex_attributes = 3;
-
-            // Color target = the window's swapchain format.
-            SDL_GPUColorTargetDescription colorTarget = {};
-            colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device, window);
-
-            SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {};
-            pipelineCreateInfo.vertex_shader = vertexShader;
-            pipelineCreateInfo.fragment_shader = fragmentShader;
-            pipelineCreateInfo.vertex_input_state = vertexInput;
-            pipelineCreateInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-            pipelineCreateInfo.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-            pipelineCreateInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
-            pipelineCreateInfo.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE; // like gltf winding
-
-            pipelineCreateInfo.depth_stencil_state.enable_depth_test = true;
-            pipelineCreateInfo.depth_stencil_state.enable_depth_write = true;
-            pipelineCreateInfo.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS;
-            pipelineCreateInfo.depth_stencil_state.enable_stencil_test = true;
-            pipelineCreateInfo.depth_stencil_state.compare_mask = 0xFF;
-            pipelineCreateInfo.depth_stencil_state.write_mask = 0xFF;
-            pipelineCreateInfo.depth_stencil_state.front_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
-            pipelineCreateInfo.depth_stencil_state.front_stencil_state.pass_op = SDL_GPU_STENCILOP_REPLACE;
-            pipelineCreateInfo.depth_stencil_state.front_stencil_state.fail_op = SDL_GPU_STENCILOP_KEEP;
-            pipelineCreateInfo.depth_stencil_state.front_stencil_state.depth_fail_op = SDL_GPU_STENCILOP_REPLACE;
-            pipelineCreateInfo.depth_stencil_state.back_stencil_state =
-                pipelineCreateInfo.depth_stencil_state.front_stencil_state;
-
-            pipelineCreateInfo.target_info.color_target_descriptions = &colorTarget;
-            pipelineCreateInfo.target_info.num_color_targets = 1;
-            pipelineCreateInfo.target_info.has_depth_stencil_target = true;
-            pipelineCreateInfo.target_info.depth_stencil_format = depthStencilFormat;
-
-            // create pipeline
-            SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipelineCreateInfo);
-            if (pipeline == nullptr) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create LitStaticStencil pipeline: %s", SDL_GetError());
-            }
-            pipelines[static_cast<size_t>(PipelineType::LitStaticStencil)] = pipeline;
-
-            // unload shaders
-            SDL_ReleaseGPUShader(device, vertexShader);
-            SDL_ReleaseGPUShader(device, fragmentShader);
+            SDL_ReleaseGPUShader(device, vs);
+            SDL_ReleaseGPUShader(device, fs);
         }
 
 
@@ -639,75 +617,19 @@ namespace ytail {
         // vertex   : 1 uniform buffer (Camera cbuffer @ b0 space1)
         // fragment : no samplers, no uniform buffers
         { // UnlitStatic
-            SDL_GPUShader* vertexShader   = loadShader(device, "BlinnPhongLit.vert", 0,
-                1, 0, 0);
-            SDL_GPUShader* fragmentShader = loadShader(device, "Unlit.frag", 0,
-                0, 0, 0);
-            if (vertexShader == nullptr || fragmentShader == nullptr) {
+            SDL_GPUShader* vs = loadShader(device, "BlinnPhongLit.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "Unlit.frag", 0, 0, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load UnlitStatic shaders");
                 return;
             }
 
-            // Vertex layout - must match the Vertex struct (vec3 position, vec3 normal, vec2 uv).
-            SDL_GPUVertexBufferDescription vbDesc = {};
-            vbDesc.slot = 0;
-            vbDesc.pitch = sizeof(Vertex);
-            vbDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-            vbDesc.instance_step_rate = 0;
+            // Pure defaults (unlit objects don't participate in outlining, so no stencil).
+            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+            pipelines[static_cast<size_t>(PipelineType::UnlitStatic)] = createPipeline(device, builder, "UnlitStatic");
 
-            SDL_GPUVertexAttribute attributes[3] = {};
-            attributes[0].location = 0;  // position -> TEXCOORD0
-            attributes[0].buffer_slot = 0;
-            attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[0].offset = offsetof(Vertex, position);
-            attributes[1].location = 1;  // normal -> TEXCOORD1
-            attributes[1].buffer_slot = 0;
-            attributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[1].offset = offsetof(Vertex, normal);
-            attributes[2].location = 2;  // uv -> TEXCOORD2
-            attributes[2].buffer_slot = 0;
-            attributes[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
-            attributes[2].offset = offsetof(Vertex, uv);
-
-            SDL_GPUVertexInputState vertexInput = {};
-            vertexInput.vertex_buffer_descriptions = &vbDesc;
-            vertexInput.num_vertex_buffers = 1;
-            vertexInput.vertex_attributes = attributes;
-            vertexInput.num_vertex_attributes = 3;
-
-            // Color target = the window's swapchain format.
-            SDL_GPUColorTargetDescription colorTarget = {};
-            colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device, window);
-
-            SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {};
-            pipelineCreateInfo.vertex_shader = vertexShader;
-            pipelineCreateInfo.fragment_shader = fragmentShader;
-            pipelineCreateInfo.vertex_input_state = vertexInput;
-            pipelineCreateInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-            pipelineCreateInfo.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-            pipelineCreateInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
-            pipelineCreateInfo.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE; // like gltf winding
-
-            // Standard z-buffer, no stencil (unlit objects don't participate in outlining).
-            pipelineCreateInfo.depth_stencil_state.enable_depth_test = true;
-            pipelineCreateInfo.depth_stencil_state.enable_depth_write = true;
-            pipelineCreateInfo.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS;
-
-            pipelineCreateInfo.target_info.color_target_descriptions = &colorTarget;
-            pipelineCreateInfo.target_info.num_color_targets = 1;
-            pipelineCreateInfo.target_info.has_depth_stencil_target = true;
-            pipelineCreateInfo.target_info.depth_stencil_format = depthStencilFormat;
-
-            // create pipeline
-            SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipelineCreateInfo);
-            if (pipeline == nullptr) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create UnlitStatic pipeline: %s", SDL_GetError());
-            }
-            pipelines[static_cast<size_t>(PipelineType::UnlitStatic)] = pipeline;
-
-            // unload shaders
-            SDL_ReleaseGPUShader(device, vertexShader);
-            SDL_ReleaseGPUShader(device, fragmentShader);
+            SDL_ReleaseGPUShader(device, vs);
+            SDL_ReleaseGPUShader(device, fs);
         }
 
 
@@ -718,84 +640,31 @@ namespace ytail {
         // vertex   : 1 uniform buffer (Camera cbuffer @ b0 space1)
         // fragment : no samplers, 1 uniform buffer (CustomColor @ b0 space3)
         { // Outline
-            SDL_GPUShader* vertexShader   = loadShader(device, "BlinnPhongLit.vert", 0,
-                1, 0, 0);
-            SDL_GPUShader* fragmentShader = loadShader(device, "CustomColor.frag", 0,
-                1, 0, 0);
-            if (vertexShader == nullptr || fragmentShader == nullptr) {
+            SDL_GPUShader* vs = loadShader(device, "BlinnPhongLit.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "CustomColor.frag", 0, 1, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load Outline shaders");
                 return;
             }
 
-            // Vertex layout - must match the Vertex struct (vec3 position, vec3 normal, vec2 uv).
-            SDL_GPUVertexBufferDescription vbDesc = {};
-            vbDesc.slot = 0;
-            vbDesc.pitch = sizeof(Vertex);
-            vbDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-            vbDesc.instance_step_rate = 0;
-
-            SDL_GPUVertexAttribute attributes[3] = {};
-            attributes[0].location = 0;  // position -> TEXCOORD0
-            attributes[0].buffer_slot = 0;
-            attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[0].offset = offsetof(Vertex, position);
-            attributes[1].location = 1;  // normal -> TEXCOORD1
-            attributes[1].buffer_slot = 0;
-            attributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[1].offset = offsetof(Vertex, normal);
-            attributes[2].location = 2;  // uv -> TEXCOORD2
-            attributes[2].buffer_slot = 0;
-            attributes[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
-            attributes[2].offset = offsetof(Vertex, uv);
-
-            SDL_GPUVertexInputState vertexInput = {};
-            vertexInput.vertex_buffer_descriptions = &vbDesc;
-            vertexInput.num_vertex_buffers = 1;
-            vertexInput.vertex_attributes = attributes;
-            vertexInput.num_vertex_attributes = 3;
-
-            // Color target = the window's swapchain format.
-            SDL_GPUColorTargetDescription colorTarget = {};
-            colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device, window);
-
-            SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {};
-            pipelineCreateInfo.vertex_shader = vertexShader;
-            pipelineCreateInfo.fragment_shader = fragmentShader;
-            pipelineCreateInfo.vertex_input_state = vertexInput;
-            pipelineCreateInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-            pipelineCreateInfo.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-            pipelineCreateInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
-            pipelineCreateInfo.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE; // like gltf winding
-
             // No depth (overdraws on top), and draw only where stencil != reference (1) so the
             // shell shows just outside the silhouette. write_mask 0 leaves the stencil untouched.
-            pipelineCreateInfo.depth_stencil_state.enable_depth_test = false;
-            pipelineCreateInfo.depth_stencil_state.enable_depth_write = false;
-            pipelineCreateInfo.depth_stencil_state.enable_stencil_test = true;
-            pipelineCreateInfo.depth_stencil_state.compare_mask = 0xFF;
-            pipelineCreateInfo.depth_stencil_state.write_mask = 0x00;
-            pipelineCreateInfo.depth_stencil_state.front_stencil_state.compare_op = SDL_GPU_COMPAREOP_NOT_EQUAL;
-            pipelineCreateInfo.depth_stencil_state.front_stencil_state.pass_op = SDL_GPU_STENCILOP_KEEP;
-            pipelineCreateInfo.depth_stencil_state.front_stencil_state.fail_op = SDL_GPU_STENCILOP_KEEP;
-            pipelineCreateInfo.depth_stencil_state.front_stencil_state.depth_fail_op = SDL_GPU_STENCILOP_KEEP;
-            pipelineCreateInfo.depth_stencil_state.back_stencil_state =
-                pipelineCreateInfo.depth_stencil_state.front_stencil_state;
+            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+            auto& ds = builder.info.depth_stencil_state;
+            ds.enable_depth_test = false;
+            ds.enable_depth_write = false;
+            ds.enable_stencil_test = true;
+            ds.compare_mask = 0xFF;
+            ds.write_mask = 0x00;
+            ds.front_stencil_state.compare_op = SDL_GPU_COMPAREOP_NOT_EQUAL;
+            ds.front_stencil_state.pass_op = SDL_GPU_STENCILOP_KEEP;
+            ds.front_stencil_state.fail_op = SDL_GPU_STENCILOP_KEEP;
+            ds.front_stencil_state.depth_fail_op = SDL_GPU_STENCILOP_KEEP;
+            ds.back_stencil_state = ds.front_stencil_state;
+            pipelines[static_cast<size_t>(PipelineType::Outline)] = createPipeline(device, builder, "Outline");
 
-            pipelineCreateInfo.target_info.color_target_descriptions = &colorTarget;
-            pipelineCreateInfo.target_info.num_color_targets = 1;
-            pipelineCreateInfo.target_info.has_depth_stencil_target = true;
-            pipelineCreateInfo.target_info.depth_stencil_format = depthStencilFormat;
-
-            // create pipeline
-            SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipelineCreateInfo);
-            if (pipeline == nullptr) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create Outline pipeline: %s", SDL_GetError());
-            }
-            pipelines[static_cast<size_t>(PipelineType::Outline)] = pipeline;
-
-            // unload shaders
-            SDL_ReleaseGPUShader(device, vertexShader);
-            SDL_ReleaseGPUShader(device, fragmentShader);
+            SDL_ReleaseGPUShader(device, vs);
+            SDL_ReleaseGPUShader(device, fs);
         }
 
 
@@ -805,147 +674,73 @@ namespace ytail {
         // vertex   : 1 uniform buffer (Camera cbuffer @ b0 space1)
         // fragment : SolidColor.frag just passes the vertex color at TEXCOORD0 through
         { // DebugLine
-            SDL_GPUShader* vertexShader   = loadShader(device, "DebugLine.vert", 0,
-                1, 0, 0);
-            SDL_GPUShader* fragmentShader = loadShader(device, "SolidColor.frag", 0,
-                0, 0, 0);
-            if (vertexShader == nullptr || fragmentShader == nullptr) {
+            SDL_GPUShader* vs = loadShader(device, "DebugLine.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "SolidColor.frag", 0, 0, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load DebugLine shaders");
                 return;
             }
 
-            // Vertex layout - must match JoltDebugVertex (vec3 position, vec4 color).
-            SDL_GPUVertexBufferDescription vbDesc = {};
-            vbDesc.slot = 0;
-            vbDesc.pitch = sizeof(JoltDebugVertex);
-            vbDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-            vbDesc.instance_step_rate = 0;
+            // Translucent line list, depth-tested against the scene but not writing depth.
+            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Line, depthStencilFormat);
+            builder.info.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
+            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+            builder.info.depth_stencil_state.enable_depth_write = false;
+            builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+            builder.enableAlphaBlend();
+            pipelines[static_cast<size_t>(PipelineType::DebugLine)] = createPipeline(device, builder, "DebugLine");
 
-            SDL_GPUVertexAttribute attributes[2] = {};
-            attributes[0].location = 0;  // position -> TEXCOORD0
-            attributes[0].buffer_slot = 0;
-            attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[0].offset = offsetof(JoltDebugVertex, position);
-            attributes[1].location = 1;  // color -> TEXCOORD1
-            attributes[1].buffer_slot = 0;
-            attributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
-            attributes[1].offset = offsetof(JoltDebugVertex, color);
-
-            SDL_GPUVertexInputState vertexInput = {};
-            vertexInput.vertex_buffer_descriptions = &vbDesc;
-            vertexInput.num_vertex_buffers = 1;
-            vertexInput.vertex_attributes = attributes;
-            vertexInput.num_vertex_attributes = 2;
-
-            SDL_GPUColorTargetDescription colorTarget = {};
-            colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device, window);
-            // Alpha blend so debug lines can be translucent (grid opacity + distance fade).
-            colorTarget.blend_state.enable_blend = true;
-            colorTarget.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
-            colorTarget.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
-            colorTarget.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
-            colorTarget.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-            colorTarget.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
-            colorTarget.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-
-            SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {};
-            pipelineCreateInfo.vertex_shader = vertexShader;
-            pipelineCreateInfo.fragment_shader = fragmentShader;
-            pipelineCreateInfo.vertex_input_state = vertexInput;
-            pipelineCreateInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
-            pipelineCreateInfo.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-            pipelineCreateInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-
-            // Depth-test against the scene so hidden edges are occluded, but don't write depth.
-            pipelineCreateInfo.depth_stencil_state.enable_depth_test = true;
-            pipelineCreateInfo.depth_stencil_state.enable_depth_write = false;
-            pipelineCreateInfo.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
-
-            pipelineCreateInfo.target_info.color_target_descriptions = &colorTarget;
-            pipelineCreateInfo.target_info.num_color_targets = 1;
-            pipelineCreateInfo.target_info.has_depth_stencil_target = true;
-            pipelineCreateInfo.target_info.depth_stencil_format = depthStencilFormat;
-
-            SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipelineCreateInfo);
-            if (pipeline == nullptr) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create DebugLine pipeline: %s", SDL_GetError());
-            }
-            pipelines[static_cast<size_t>(PipelineType::DebugLine)] = pipeline;
-
-            SDL_ReleaseGPUShader(device, vertexShader);
-            SDL_ReleaseGPUShader(device, fragmentShader);
+            SDL_ReleaseGPUShader(device, vs);
+            SDL_ReleaseGPUShader(device, fs);
         }
 
         // Editor grid: same line layout as DebugLine, but the fragment shader fades each line
         // per-pixel from a GridFade uniform so lines can be full-length (few vertices, no overdraw
         // from per-cell splitting).
         { // Grid
-            SDL_GPUShader* vertexShader   = loadShader(device, "GridLine.vert", 0,
-                1, 0, 0);
-            SDL_GPUShader* fragmentShader = loadShader(device, "GridLine.frag", 0,
-                1, 0, 0);
-            if (vertexShader == nullptr || fragmentShader == nullptr) {
+            SDL_GPUShader* vs = loadShader(device, "GridLine.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "GridLine.frag", 0, 1, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load Grid shaders");
                 return;
             }
 
-            SDL_GPUVertexBufferDescription vbDesc = {};
-            vbDesc.slot = 0;
-            vbDesc.pitch = sizeof(JoltDebugVertex);
-            vbDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-            vbDesc.instance_step_rate = 0;
+            // Same state as DebugLine; the fragment shader handles the per-pixel fade.
+            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Line, depthStencilFormat);
+            builder.info.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
+            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+            builder.info.depth_stencil_state.enable_depth_write = false;
+            builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+            builder.enableAlphaBlend();
+            pipelines[static_cast<size_t>(PipelineType::Grid)] = createPipeline(device, builder, "Grid");
 
-            SDL_GPUVertexAttribute attributes[2] = {};
-            attributes[0].location = 0;
-            attributes[0].buffer_slot = 0;
-            attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-            attributes[0].offset = offsetof(JoltDebugVertex, position);
-            attributes[1].location = 1;
-            attributes[1].buffer_slot = 0;
-            attributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
-            attributes[1].offset = offsetof(JoltDebugVertex, color);
+            SDL_ReleaseGPUShader(device, vs);
+            SDL_ReleaseGPUShader(device, fs);
+        }
 
-            SDL_GPUVertexInputState vertexInput = {};
-            vertexInput.vertex_buffer_descriptions = &vbDesc;
-            vertexInput.num_vertex_buffers = 1;
-            vertexInput.vertex_attributes = attributes;
-            vertexInput.num_vertex_attributes = 2;
-
-            SDL_GPUColorTargetDescription colorTarget = {};
-            colorTarget.format = SDL_GetGPUSwapchainTextureFormat(device, window);
-            colorTarget.blend_state.enable_blend = true;
-            colorTarget.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
-            colorTarget.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
-            colorTarget.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
-            colorTarget.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-            colorTarget.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
-            colorTarget.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-
-            SDL_GPUGraphicsPipelineCreateInfo pipelineCreateInfo = {};
-            pipelineCreateInfo.vertex_shader = vertexShader;
-            pipelineCreateInfo.fragment_shader = fragmentShader;
-            pipelineCreateInfo.vertex_input_state = vertexInput;
-            pipelineCreateInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
-            pipelineCreateInfo.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-            pipelineCreateInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-
-            pipelineCreateInfo.depth_stencil_state.enable_depth_test = true;
-            pipelineCreateInfo.depth_stencil_state.enable_depth_write = false;
-            pipelineCreateInfo.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
-
-            pipelineCreateInfo.target_info.color_target_descriptions = &colorTarget;
-            pipelineCreateInfo.target_info.num_color_targets = 1;
-            pipelineCreateInfo.target_info.has_depth_stencil_target = true;
-            pipelineCreateInfo.target_info.depth_stencil_format = depthStencilFormat;
-
-            SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipelineCreateInfo);
-            if (pipeline == nullptr) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create Grid pipeline: %s", SDL_GetError());
+        // Camera-facing editor sprites (light / camera icons). Reuses BlinnPhongLit.vert (the model
+        // matrix is built camera-facing on the CPU); Billboard.frag samples the icon. Alpha-blended,
+        // depth-tested but no depth write, no culling so either winding shows.
+        // vertex   : 1 uniform buffer (Camera cbuffer @ b0 space1)
+        // fragment : 1 sampler (icon @ t0 space2), no uniform buffers
+        { // Billboard
+            SDL_GPUShader* vs = loadShader(device, "BlinnPhongLit.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "Billboard.frag", 1, 0, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load Billboard shaders");
+                return;
             }
-            pipelines[static_cast<size_t>(PipelineType::Grid)] = pipeline;
 
-            SDL_ReleaseGPUShader(device, vertexShader);
-            SDL_ReleaseGPUShader(device, fragmentShader);
+            // Alpha-blended sprite, depth-tested but not writing depth, no culling (either winding).
+            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+            builder.info.depth_stencil_state.enable_depth_write = false;
+            builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+            builder.enableAlphaBlend();
+            pipelines[static_cast<size_t>(PipelineType::Billboard)] = createPipeline(device, builder, "Billboard");
+
+            SDL_ReleaseGPUShader(device, vs);
+            SDL_ReleaseGPUShader(device, fs);
         }
 
     }

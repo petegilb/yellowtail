@@ -23,6 +23,7 @@ namespace ytail {
         Outline,
         DebugLine,
         Grid,
+        Billboard,
         Count
     };
 

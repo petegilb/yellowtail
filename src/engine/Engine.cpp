@@ -19,6 +19,8 @@
 #include "managers/PhysicsManager.h"
 #include "render/DebugLineRenderer.h"
 #include "render/DebugDraw.h"
+#include "render/BillboardRenderer.h"
+#include "render/Texture.h"
 #include "components/RenderComponent.h"
 #include "components/TransformComponent.h"
 #include "components/CameraComponent.h"
@@ -52,6 +54,7 @@ namespace ytail {
         debugLineRenderer.reset(); // frees the debug line vertex/transfer buffers
         gridLineRenderer.reset();
         gizmoLineRenderer.reset();
+        billboardRenderer.reset();
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
         if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
         if (device && sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
@@ -109,6 +112,7 @@ namespace ytail {
         debugLineRenderer = std::make_unique<DebugLineRenderer>(device);
         gridLineRenderer = std::make_unique<DebugLineRenderer>(device);
         gizmoLineRenderer = std::make_unique<DebugLineRenderer>(device);
+        billboardRenderer = std::make_unique<BillboardRenderer>(device);
         initializeImGui();
 
         // set app icon
@@ -705,6 +709,30 @@ namespace ytail {
         if (showLightGizmos && gizmoLineRenderer) {
             gizmoLineRenderer->draw(renderPass, commandBuffer,
                 resourceManager->getPipeline(PipelineType::DebugLine), projection * view);
+        }
+
+        // Editor icons: camera-facing sprites for lights and inactive cameras.
+        if (showEditorIcons && billboardRenderer) {
+            std::vector<BillboardItem> icons;
+            SDL_GPUSampler* sampler = resourceManager->getSampler(SamplerType::LinearClamp);
+            const Texture* lightIcon  = resourceManager->getTexture("textures/icons/lightbulb_icon.png", true).get();
+            const Texture* cameraIcon = resourceManager->getTexture("textures/icons/camera_icon.png", true).get();
+            for (const auto& [id, entity] : entities) {
+                if (entity == nullptr) continue;
+                const auto* transform = entity->getComponent<TransformComponent>();
+                if (transform == nullptr) continue;
+
+                const Texture* icon = nullptr;
+                if (entity->getComponent<LightComponent>() != nullptr) {
+                    icon = lightIcon;
+                } else if (entity->getComponent<CameraComponent>() != nullptr && entity.get() != activeCamera) {
+                    icon = cameraIcon;
+                }
+                if (icon == nullptr) continue;
+                icons.push_back({ transform->position, kEditorIconSize, icon, sampler });
+            }
+            billboardRenderer->draw(renderPass, commandBuffer,
+                resourceManager->getPipeline(PipelineType::Billboard), view, projection, icons);
         }
 
         SDL_EndGPURenderPass(renderPass);

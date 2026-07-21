@@ -22,6 +22,7 @@ namespace ytail {
         { PipelineType::Outline,          "Outline" },
         { PipelineType::DebugLine,        "DebugLine" },
         { PipelineType::Grid,             "Grid" },
+        { PipelineType::Billboard,        "Billboard" },
     })
 
     NLOHMANN_JSON_SERIALIZE_ENUM(SamplerType, {

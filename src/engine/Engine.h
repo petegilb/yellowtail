@@ -21,6 +21,7 @@ namespace ytail {
     class ResourceManager;
     class Application;
     class DebugLineRenderer;
+    class BillboardRenderer;
 
     class Engine {
     public:
@@ -132,6 +133,9 @@ namespace ytail {
         // Editor light gizmos
         bool showLightGizmos = false;
         Uint32 selectedEntity = 0;
+
+        // Editor billboard icons for lights and inactive cameras (camera-facing sprites).
+        bool showEditorIcons = false;
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;
@@ -207,6 +211,9 @@ namespace ytail {
 
         // Draws editor light gizmos (arrows / attenuation spheres), on its own buffer.
         std::unique_ptr<ytail::DebugLineRenderer> gizmoLineRenderer;
+
+        // Draws camera-facing editor icons. Icon textures come from the ResourceManager cache.
+        std::unique_ptr<ytail::BillboardRenderer> billboardRenderer;
 
         // The game or editor driving this engine. Non-owning, lives in main()
         Application* app = nullptr;

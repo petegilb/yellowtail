@@ -28,7 +28,10 @@
 #include "engine/components/RenderComponent.h"
 #include "engine/components/TransformComponent.h"
 #include "engine/components/RigidbodyComponent.h"
+#include "engine/components/LightComponent.h"
+#include "engine/components/CameraComponent.h"
 #include "engine/render/Mesh.h"
+#include "engine/render/BillboardRenderer.h"
 #include "engine/managers/ResourceManager.h"
 #include "engine/serialize/ComponentRegistry.h"
 #include "engine/serialize/EnumJson.h"
@@ -110,6 +113,27 @@ namespace ytail
                 picked = id;
             }
         }
+
+        // Lights and inactive cameras have no mesh; pick their billboard icons via a small
+        // world-space box at the entity position (t stays comparable to the mesh hits above).
+        for (const auto& [id, entity] : engine->getEntities()) {
+            if (!entity) continue;
+            auto* transform = entity->getComponent<TransformComponent>();
+            if (!transform) continue;
+            const bool hasLight  = entity->getComponent<LightComponent>() != nullptr;
+            const bool hasCamera = entity->getComponent<CameraComponent>() != nullptr
+                                   && id != editor->getEditorCameraId();
+            if (!hasLight && !hasCamera) continue;
+
+            const glm::vec3 boxMin = transform->position - glm::vec3(kEditorIconSize);
+            const glm::vec3 boxMax = transform->position + glm::vec3(kEditorIconSize);
+            float t;
+            if (rayAabb(origin, dir, boxMin, boxMax, t) && t < bestT) {
+                bestT = t;
+                picked = id;
+            }
+        }
+
         setSelected(picked);
     }
 
