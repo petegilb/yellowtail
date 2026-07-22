@@ -69,6 +69,7 @@ namespace ytail {
         for (const auto& entityJson : root.at("entities")) {
             const Uint32 id = entityJson.at("id").get<Uint32>();
             Entity* entity = engine.addEntityWithId(id);
+            if (entity == nullptr) continue; // duplicate id in the file; already logged
             entity->setName(entityJson.value("name", std::string()));
 
             if (entityJson.contains("parent")) {

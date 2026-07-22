@@ -124,6 +124,8 @@ namespace ytail {
                                    xform->getWorldVersion() });
         }
         if (candidates.empty()) return; // stale slot owners get reconciled next time a light exists
+        // Lowest ids win slots when over the cap, stable across entity-map rehashes.
+        std::ranges::sort(candidates, {}, &Candidate::id);
 
         // World transform + bounding sphere for every shadow caster, computed once for the frame.
         std::vector<CasterInfo> allCasters;

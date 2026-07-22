@@ -266,7 +266,7 @@ namespace ytail
         static constexpr std::pair<PipelineType, const char*> pipelines[] = {
             { PipelineType::LitStatic,   "LitStatic" },
             { PipelineType::UnlitStatic, "UnlitStatic" },
-            { PipelineType::LitSkeletal, "LitSkeletal" },
+            // TODO LitSkeletal goes back in once initializePipelines actually builds it
         };
         const char* pipelinePreview = "LitStatic";
         for (const auto& [type, label] : pipelines) {

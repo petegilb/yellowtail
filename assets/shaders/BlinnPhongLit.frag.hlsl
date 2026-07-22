@@ -168,7 +168,9 @@ float4 main(Input input) : SV_Target
 
         // specular (Blinn-Phong halfway vector)
         float3 halfway  = normalize(lightDir + viewDir);
-        float  spec     = pow(max(dot(norm, halfway), 0.0f), shininess);
+        // Gate on diff > 0: the halfway vector can produce a highlight even when the light is
+        // behind the surface, so kill specular wherever there's no diffuse contribution.
+        float  spec     = pow(max(dot(norm, halfway), 0.0f), shininess) * (diff > 0.0f ? 1.0f : 0.0f);
         float3 specular = light.color * spec * specularColor;
 
         // The sun casts the 2D shadow map; point lights sample their own cube slice.

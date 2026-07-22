@@ -96,8 +96,11 @@ namespace ytail
                     Input::get().setMouseCaptured(false);
                 break;
             case SDL_EVENT_MOUSE_WHEEL:
-                moveSpeed += event.wheel.y * scrollPower;
-                moveSpeed = SDL_clamp(moveSpeed, minSpeed, maxSpeed);
+                // Fly-speed tweak; don't hijack the wheel while it's scrolling an ImGui panel.
+                if (Input::get().isMouseCaptured() || !ImGui::GetIO().WantCaptureMouse) {
+                    moveSpeed += event.wheel.y * scrollPower;
+                    moveSpeed = SDL_clamp(moveSpeed, minSpeed, maxSpeed);
+                }
                 break;
             case SDL_EVENT_MOUSE_MOTION:
                 if (Input::get().isMouseCaptured()) {

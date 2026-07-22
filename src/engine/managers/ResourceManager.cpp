@@ -226,6 +226,19 @@ namespace ytail {
         // TODO allow importing more than one mesh (we're naively getting only the first index)
         cgltf_mesh& meshData = data->meshes[0];
         std::string name = meshData.name ? meshData.name : "";
+
+        // Map each distinct glTF material to a dense slot in first-appearance order, so a
+        // multi-material mesh draws submesh N with materials[slot(N)] in RenderComponent.
+        // Primitives without a material (nullptr) share one slot.
+        std::vector<const cgltf_material*> slotMaterials;
+        auto materialSlotFor = [&slotMaterials](const cgltf_material* gltfMaterial) -> Uint32 {
+            for (size_t s = 0; s < slotMaterials.size(); ++s) {
+                if (slotMaterials[s] == gltfMaterial) return static_cast<Uint32>(s);
+            }
+            slotMaterials.push_back(gltfMaterial);
+            return static_cast<Uint32>(slotMaterials.size() - 1);
+        };
+
         for (size_t p=0; p < meshData.primitives_count; p++) {
             cgltf_primitive& primitive = meshData.primitives[p];
 
@@ -257,14 +270,15 @@ namespace ytail {
             const size_t indexStart = indices.size();
             // handle case if the mesh is not indexed
             // push one Submesh per primitive
+            const Uint32 materialSlot = materialSlotFor(primitive.material);
             if (primitive.indices) {
                 for (size_t k = 0; k < primitive.indices->count; ++k)
                     indices.push_back(vertexStart + cgltf_accessor_read_index(primitive.indices, k));
-                submeshes.push_back({ (Uint32)indexStart, (Uint32)primitive.indices->count, 0 });
+                submeshes.push_back({ (Uint32)indexStart, (Uint32)primitive.indices->count, materialSlot });
             } else {
                 for (size_t v = 0; v < count; ++v)
                     indices.push_back((Uint32)(vertexStart + v));
-                submeshes.push_back({ (Uint32)indexStart, (Uint32)count, 0 });
+                submeshes.push_back({ (Uint32)indexStart, (Uint32)count, materialSlot });
             }
         }
 
@@ -429,14 +443,14 @@ namespace ytail {
             return nullptr;
         }
 
-        char fullPath[256];
-        SDL_snprintf(fullPath, sizeof(fullPath), "%sassets/shaders/%s.hlsl", BasePath, shaderFilename);
+        // std::string, not a fixed buffer: a long install path would silently truncate.
+        const std::string fullPath = std::string(BasePath) + "assets/shaders/" + shaderFilename + ".hlsl";
 
         size_t codeSize;
-        void* code = SDL_LoadFile(fullPath, &codeSize);
+        void* code = SDL_LoadFile(fullPath.c_str(), &codeSize);
         if (code == nullptr)
         {
-            SDL_Log("Failed to load shader from disk! %s", fullPath);
+            SDL_Log("Failed to load shader from disk! %s", fullPath.c_str());
             return nullptr;
         }
 

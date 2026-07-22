@@ -15,6 +15,9 @@
 
 #include "Entity.h"
 #include "GameplayStatics.h"
+#include "render/BillboardRenderer.h"
+#include "render/DebugDraw.h"
+#include "render/JoltDebugVertex.h"
 #include "serialize/ComponentRegistry.h"
 
 namespace ytail {
@@ -214,8 +217,12 @@ namespace ytail {
 
         // locks the framerate if greater than 0
         int framerateLock = 0;
-        int entityCounter = 0;
+        Uint32 entityCounter = 0;
         int drawCallsLastFrame = 0;
+
+        // Nonzero while the tick loops are iterating `entities`. addEntity/removeEntity assert on
+        // it: mutating the map mid-iteration is UB (defer spawns/destroys to after the loop).
+        int entityIterationDepth = 0;
 
         // world stuff
         glm::vec3 ambientLight{0.0f}; // currently set to ambientDebug
@@ -245,6 +252,12 @@ namespace ytail {
 
         // Omnidirectional point-light shadows (cube-array depth maps).
         std::unique_ptr<ytail::PointShadowRenderer> pointShadowRenderer;
+
+        // Per-frame scratch, kept as members so clear() retains capacity across frames.
+        // having these stops reeallocating the heap each frame
+        std::vector<JoltDebugVertex> gridLineScratch;
+        DebugDraw gizmoDraw;
+        std::vector<BillboardItem> iconScratch;
 
         // The game or editor driving this engine. Non-owning, lives in main()
         Application* app = nullptr;

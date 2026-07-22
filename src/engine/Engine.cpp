@@ -5,6 +5,7 @@
 #include "Engine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <ranges>
 
@@ -73,9 +74,15 @@ namespace ytail {
     }
 
     int Engine::run() {
+        // GPU validation layer only in debug builds; it costs real CPU/driver time in release.
+#ifdef NDEBUG
+        constexpr bool kGpuDebug = false;
+#else
+        constexpr bool kGpuDebug = true;
+#endif
         device = SDL_CreateGPUDevice(
             SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL,
-            true,
+            kGpuDebug,
             nullptr);
         if (device == nullptr){
             SDL_Log("CreateDevice failed");
@@ -121,12 +128,13 @@ namespace ytail {
         pointShadowRenderer = std::make_unique<PointShadowRenderer>(device, resourceManager.get());
         initializeImGui();
 
-        // set app icon
-        SDL_Surface* imageData = IMG_Load(resourceManager->resolveAssetPath("textures/icons/appicon.png").c_str());
-        if (imageData == nullptr){
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not app icon! %s", SDL_GetError());
+        // set app icon (SDL_SetWindowIcon copies the surface, so free it right after)
+        if (SDL_Surface* iconSurface = IMG_Load(resourceManager->resolveAssetPath("textures/icons/appicon.png").c_str())) {
+            SDL_SetWindowIcon(window, iconSurface);
+            SDL_DestroySurface(iconSurface);
+        } else {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not load app icon! %s", SDL_GetError());
         }
-        SDL_SetWindowIcon(window, imageData);
 
         // The app (game or editor) builds its scene now that the engine + resources are ready.
         if (app) app->start();
@@ -197,9 +205,11 @@ namespace ytail {
         // Variable-step per-frame work (runs as fast as we render): engine, then app, then components.
         updateTick();
         if (app) app->tick(deltaTime);
+        ++entityIterationDepth;
         for (const auto& [id, entity] : entities) {
             if (entity) entity->tick(deltaTime);
         }
+        --entityIterationDepth;
 
         // UI should be updated right before everything is drawn to match the state of the engine.
         uiTick();
@@ -217,9 +227,11 @@ namespace ytail {
             physics::PhysicsManager::get().step(deltaTime);
         }
         if (app) app->fixedTick(deltaTime);
+        ++entityIterationDepth;
         for (const auto& [id, entity] : entities) {
             if (entity) entity->fixedTick(deltaTime);
         }
+        --entityIterationDepth;
         tickNumber++;
     }
 
@@ -229,9 +241,11 @@ namespace ytail {
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (app) app->eventTick(event);
+            ++entityIterationDepth;
             for (const auto& [id, entity] : entities) {
                 if (entity) entity->eventTick(event);
             }
+            --entityIterationDepth;
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)) {
                 bRunning = false;
                 return;
@@ -302,29 +316,33 @@ namespace ytail {
     }
 
     bool Engine::computeSunLightMatrix(glm::mat4& outLightViewProj) const {
-        // First directional light flagged to cast shadows drives the map.
+        // Lowest-id directional light flagged to cast shadows drives the map. Lowest id (not map
+        // order) so the pick is stable when the entity map rehashes.
+        const TransformComponent* sunTransform = nullptr;
+        Uint32 sunId = 0;
         for (const auto& [id, entity] : entities) {
             if (entity == nullptr) continue;
             const auto* light = entity->getComponent<LightComponent>();
             const auto* transform = entity->getComponent<TransformComponent>();
             if (light == nullptr || transform == nullptr) continue;
             if (light->type != LightType::Directional || !light->castsShadows) continue;
-
-            // -Z rotated into world space (same as the lit path).
-            const glm::vec3 dir = glm::normalize(transform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
-            // Sit the light back along -dir from the focus and look toward it.
-            const glm::vec3 eye = shadowFocus - dir * shadowDistance;
-            // Avoid a degenerate up vector when the sun points nearly straight down.
-            const glm::vec3 up = (std::abs(dir.y) > 0.99f) ? glm::vec3(0.0f, 0.0f, 1.0f)
-                                                           : glm::vec3(0.0f, 1.0f, 0.0f);
-            const glm::mat4 lightView = glm::lookAt(eye, shadowFocus, up);
-            const glm::mat4 lightProj = glm::ortho(-shadowOrthoExtent, shadowOrthoExtent,
-                                                   -shadowOrthoExtent, shadowOrthoExtent,
-                                                   shadowNear, shadowFar);
-            outLightViewProj = lightProj * lightView;
-            return true;
+            if (sunTransform == nullptr || id < sunId) { sunTransform = transform; sunId = id; }
         }
-        return false;
+        if (sunTransform == nullptr) return false;
+
+        // -Z rotated into world space (same as the lit path).
+        const glm::vec3 dir = glm::normalize(sunTransform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
+        // Sit the light back along -dir from the focus and look toward it.
+        const glm::vec3 eye = shadowFocus - dir * shadowDistance;
+        // Avoid a degenerate up vector when the sun points nearly straight down.
+        const glm::vec3 up = (std::abs(dir.y) > 0.99f) ? glm::vec3(0.0f, 0.0f, 1.0f)
+                                                       : glm::vec3(0.0f, 1.0f, 0.0f);
+        const glm::mat4 lightView = glm::lookAt(eye, shadowFocus, up);
+        const glm::mat4 lightProj = glm::ortho(-shadowOrthoExtent, shadowOrthoExtent,
+                                               -shadowOrthoExtent, shadowOrthoExtent,
+                                               shadowNear, shadowFar);
+        outLightViewProj = lightProj * lightView;
+        return true;
     }
 
     void Engine::getRenderTargetSize(int& outWidth, int& outHeight) const {
@@ -569,23 +587,24 @@ namespace ytail {
 
         // Editor grid: rebuild + stage its world-space lines (same before-pass copy rule).
         if (showGrid && gridLineRenderer) {
-            std::vector<JoltDebugVertex> gridLines;
-            buildGridLines(gridLines, gridSpacing, gridExtent, camXform->getPosition());
-            gridLineRenderer->upload(commandBuffer, gridLines);
+            buildGridLines(gridLineScratch, gridSpacing, gridExtent, camXform->getPosition());
+            gridLineRenderer->upload(commandBuffer, gridLineScratch);
         }
 
         // Editor light gizmos: rebuild + stage (same before-pass copy rule).
         if (showLightGizmos && gizmoLineRenderer) {
-            DebugDraw gizmos;
-            buildLightGizmos(gizmos, entities, selectedEntity);
-            gizmoLineRenderer->upload(commandBuffer, gizmos.vertices());
+            buildLightGizmos(gizmoDraw, entities, selectedEntity);
+            gizmoLineRenderer->upload(commandBuffer, gizmoDraw.vertices());
         }
 
         // Render scene depth from the sun's POV so the scene pass can sample it. The map is always
         // bound at slot 2; shadowEnabled (below) gates whether the shader actually reads it.
         glm::mat4 lightViewProj(1.0f);
-        const bool hasShadowCaster = showShadows && computeSunLightMatrix(lightViewProj);
+        // Texture first: if creation failed (null), skip the pass and the shader's shadow sampling
+        // (shadowEnabled stays 0) rather than rendering into / binding a null texture.
         ensureShadowMapTexture(shadowMapSize);
+        const bool hasShadowCaster = showShadows && shadowMapTexture != nullptr
+                                  && computeSunLightMatrix(lightViewProj);
         if (hasShadowCaster) {
             SDL_GPUDepthStencilTargetInfo shadowTargetInfo = {};
             shadowTargetInfo.texture          = shadowMapTexture;
@@ -663,24 +682,31 @@ namespace ytail {
         FrameLightingUniform frameLighting{};
         frameLighting.viewPos = camXform->getPosition();
         frameLighting.ambient = ambientLight;
-        int lightCount = 0;
+        // Gather + sort by id so which lights make the MaxLights cut is stable across map rehashes.
+        struct SceneLight { Uint32 id; const LightComponent* light; const TransformComponent* transform; };
+        std::vector<SceneLight> sceneLights;
         for (const auto& [lightIdx, lightEntity] : entities) {
-            if (lightCount >= FrameLightingUniform::MaxLights) break;
             if (lightEntity == nullptr) continue;
             const auto* lightComp = lightEntity->getComponent<LightComponent>();
             const auto* lightXform = lightEntity->getComponent<TransformComponent>();
             if (lightComp == nullptr || lightXform == nullptr) continue;
+            sceneLights.push_back({ lightIdx, lightComp, lightXform });
+        }
+        std::ranges::sort(sceneLights, {}, &SceneLight::id);
 
+        int lightCount = 0;
+        for (const SceneLight& sceneLight : sceneLights) {
+            if (lightCount >= FrameLightingUniform::MaxLights) break;
             GpuLight& gpuLight = frameLighting.lights[lightCount];
             // World-space so lighting + shadows agree with parented lights (see PointShadowRenderer).
-            gpuLight.position    = glm::vec3(lightXform->worldMatrix()[3]);
+            gpuLight.position    = glm::vec3(sceneLight.transform->worldMatrix()[3]);
             // Forward (-Z) rotated into world space: the direction a directional light travels.
-            gpuLight.direction   = glm::normalize(lightXform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
-            gpuLight.color       = lightComp->color * lightComp->intensity;
-            gpuLight.attenuation = lightComp->attenuation;
-            gpuLight.type        = static_cast<int>(lightComp->type);
+            gpuLight.direction   = glm::normalize(sceneLight.transform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
+            gpuLight.color       = sceneLight.light->color * sceneLight.light->intensity;
+            gpuLight.attenuation = sceneLight.light->attenuation;
+            gpuLight.type        = static_cast<int>(sceneLight.light->type);
             // Cube slice for a shadowed point light this frame, or -1 (slotForLightId handles both).
-            gpuLight.shadowIndex = showPointShadows ? pointShadowRenderer->slotForLightId(lightIdx) : -1;
+            gpuLight.shadowIndex = showPointShadows ? pointShadowRenderer->slotForLightId(sceneLight.id) : -1;
             lightCount++;
         }
         frameLighting.lightCount = lightCount;
@@ -698,11 +724,14 @@ namespace ytail {
         shadowUniform.pointDiskRadius = pointShadowDiskRadius;
         SDL_PushGPUFragmentUniformData(commandBuffer, 2, &shadowUniform, sizeof(shadowUniform));
 
-        SDL_GPUTextureSamplerBinding shadowBinding{
-            .texture = shadowMapTexture,
-            .sampler = resourceManager->getSampler(SamplerType::ShadowPCF)
-        };
-        SDL_BindGPUFragmentSamplers(renderPass, 2, &shadowBinding, 1);
+        // Skip if creation failed (null); shadowEnabled is 0 in that case so the shader won't read it.
+        if (shadowMapTexture) {
+            SDL_GPUTextureSamplerBinding shadowBinding{
+                .texture = shadowMapTexture,
+                .sampler = resourceManager->getSampler(SamplerType::ShadowPCF)
+            };
+            SDL_BindGPUFragmentSamplers(renderPass, 2, &shadowBinding, 1);
+        }
 
         // Point-light cube array at slot 3 (per-light shadowIndex gates whether it's read).
         // Skip if creation failed (null); binding a null texture is invalid.
@@ -759,19 +788,17 @@ namespace ytail {
                 if (!pipeline) continue;
                 SDL_BindGPUGraphicsPipeline(renderPass, pipeline);
                 if (!material->textures.empty()){
-                    // build one binding per texture, in slot order (index 0 → t0/s0, 1 → t1/s1, ...)
-                    std::vector<SDL_GPUTextureSamplerBinding> binds;
-                    binds.reserve(material->textures.size());
-                    for (const auto& tb : material->textures) {
-                        binds.push_back({ .texture = tb.texture->handle(), .sampler = tb.sampler });
+                    // One binding per texture, in slot order (index 0 → t0/s0, 1 → t1/s1, ...).
+                    // Fixed-size stack array: no heap allocation per draw (lit materials use ≤4 slots).
+                    std::array<SDL_GPUTextureSamplerBinding, 8> binds{};
+                    const Uint32 bindCount = std::min(static_cast<Uint32>(material->textures.size()),
+                                                      static_cast<Uint32>(binds.size()));
+                    for (Uint32 bindIdx = 0; bindIdx < bindCount; ++bindIdx) {
+                        const auto& tb = material->textures[bindIdx];
+                        binds[bindIdx] = { .texture = tb.texture->handle(), .sampler = tb.sampler };
                     }
                     // one call binds the whole set starting at slot 0
-                    SDL_BindGPUFragmentSamplers(
-                        renderPass,
-                        0,
-                        binds.data(),
-                        static_cast<Uint32>(binds.size())
-                    );
+                    SDL_BindGPUFragmentSamplers(renderPass, 0, binds.data(), bindCount);
                 }
                 // Push per-material uniform bytes to fragment slot 1 (Material b1 space3).
                 // Slot 0 is the FrameLighting buffer pushed once above.
@@ -856,7 +883,8 @@ namespace ytail {
 
         // Editor icons: camera-facing sprites for lights and inactive cameras.
         if (showEditorIcons && billboardRenderer) {
-            std::vector<BillboardItem> icons;
+            std::vector<BillboardItem>& icons = iconScratch;
+            icons.clear();
             SDL_GPUSampler* sampler = resourceManager->getSampler(SamplerType::LinearClamp);
             const Texture* lightIcon  = resourceManager->getTexture("textures/icons/lightbulb_icon.png", true).get();
             const Texture* cameraIcon = resourceManager->getTexture("textures/icons/camera_icon.png", true).get();
@@ -908,25 +936,34 @@ namespace ytail {
     }
 
     void Engine::handleInput(const SDL_KeyboardEvent &keyboard_event) {
+        // Ignore global hotkeys while a text field owns the keyboard (e.g. renaming an entity).
+        if (ImGui::GetIO().WantTextInput) return;
         if (keyboard_event.key == SDLK_TAB) {
             showDebugWindow = !showDebugWindow;
         }
     }
 
     Entity* Engine::addEntity() {
+        SDL_assert(entityIterationDepth == 0 && "spawn during entity tick; defer to after the loop");
         entityCounter++;
         entities[entityCounter] = std::make_unique<Entity>(entityCounter);
         return entities[entityCounter].get();
     }
 
     Entity* Engine::addEntityWithId(const Uint32 id) {
+        SDL_assert(entityIterationDepth == 0 && "spawn during entity tick; defer to after the loop");
+        if (entities.contains(id)) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Entity id %u already exists; refusing duplicate", id);
+            return nullptr;
+        }
         entities[id] = std::make_unique<Entity>(id);
         // keep the counter ahead of every loaded id so new entities don't reuse one
-        if (static_cast<int>(id) > entityCounter) entityCounter = static_cast<int>(id);
+        if (id > entityCounter) entityCounter = id;
         return entities[id].get();
     }
 
     void Engine::clearScene() {
+        SDL_assert(entityIterationDepth == 0 && "clear during entity tick; defer to after the loop");
         entities.clear();
         activeCamera = nullptr;
         entityCounter = 0;
@@ -967,6 +1004,7 @@ namespace ytail {
     }
 
     void Engine::removeEntity(const Uint32 id) {
+        SDL_assert(entityIterationDepth == 0 && "destroy during entity tick; defer to after the loop");
         Entity* entity = getEntity(id);
         if (entity == nullptr) return;
 
@@ -1037,7 +1075,9 @@ namespace ytail {
         const glm::vec3 nearPoint = glm::vec3(nearH) / nearH.w;
         const glm::vec3 farPoint  = glm::vec3(farH)  / farH.w;
 
-        outOrigin = activeCamera->getComponent<TransformComponent>()->getPosition();
+        // Near-plane point, already world-space via the same view matrix as the direction — unlike
+        // the transform's local position, this stays correct for a parented camera.
+        outOrigin = nearPoint;
         outDir = glm::normalize(farPoint - nearPoint);
         return true;
     }
