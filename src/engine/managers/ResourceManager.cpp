@@ -779,6 +779,29 @@ namespace ytail {
             SDL_ReleaseGPUShader(device, vs);
             SDL_ReleaseGPUShader(device, fs);
         }
+
+        // Omnidirectional point-light shadows. Same depth-only, front-face-cull state as
+        // ShadowDepth, but a perspective projection (per cube face) and a real fragment shader
+        // that writes linear distance-to-light into SV_Depth.
+        // vertex   : 1 uniform buffer (PointLightMVP @ b0 space1 = faceViewProj*model + model)
+        // fragment : 1 uniform buffer (PointLightDepth @ b0 space3 = lightPos + farPlane)
+        { // PointShadowDepth
+            SDL_GPUShader* vs = loadShader(device, "PointShadowDepth.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "PointShadowDepth.frag", 0, 1, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load PointShadowDepth shaders");
+                return;
+            }
+
+            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_FRONT;
+            builder.depthOnly(shadowMapFormat);
+            pipelines[static_cast<size_t>(PipelineType::PointShadowDepth)] =
+                createPipeline(device, builder, "PointShadowDepth");
+
+            SDL_ReleaseGPUShader(device, vs);
+            SDL_ReleaseGPUShader(device, fs);
+        }
     }
 
     void ResourceManager::initializeSamplers() {

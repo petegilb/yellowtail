@@ -22,6 +22,7 @@ namespace ytail {
     class Application;
     class DebugLineRenderer;
     class BillboardRenderer;
+    class PointShadowRenderer;
 
     class Engine {
     public:
@@ -148,6 +149,9 @@ namespace ytail {
         float shadowFar = 150.0f;
         float shadowBias = 0.0005f;
         glm::vec3 shadowFocus{0.0f};      // world point the shadow box is centered on
+
+        // Omnidirectional shadows for point lights flagged castsShadows.
+        bool showPointShadows = true;
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;
@@ -235,13 +239,16 @@ namespace ytail {
         // Draws camera-facing editor icons. Icon textures come from the ResourceManager cache.
         std::unique_ptr<ytail::BillboardRenderer> billboardRenderer;
 
+        // Omnidirectional point-light shadows (cube-array depth maps).
+        std::unique_ptr<ytail::PointShadowRenderer> pointShadowRenderer;
+
         // The game or editor driving this engine. Non-owning, lives in main()
         Application* app = nullptr;
 
         // dear imgui
-        void initializeImGui();
-        void renderImGui(SDL_GPUCommandBuffer* commandBuffer, Uint32 fbWidth, Uint32 fbHeight);
-        void shutdownImGui();
+        void initializeImGui() const;
+        static void renderImGui(SDL_GPUCommandBuffer* commandBuffer, Uint32 fbWidth, Uint32 fbHeight);
+        static void shutdownImGui();
         ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
         ImVec4 ambientDebug = ImVec4(1.f, 1.f, 1.f, 1.00f);
         float ambientIntensity = 0.2f;

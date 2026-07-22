@@ -25,6 +25,7 @@ namespace ytail {
         Grid,
         Billboard,
         ShadowDepth,
+        PointShadowDepth,
         Count
     };
 

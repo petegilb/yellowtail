@@ -65,6 +65,8 @@ yellowtail/
 - https://jorenjoestar.github.io/post/serialization_for_games/
 - https://handmade.network/p/29/swedish-cubes-for-unity/blog/p/2723-how_media_molecule_does_serialization
 - https://learnopengl.com/Advanced-Lighting/Shadows/Shadow-Mapping
+- https://learnopengl.com/Advanced-Lighting/Shadows/Point-Shadows
+- https://learnopengl.com/Guest-Articles/2021/CSM
 
 ## Shaders (SDL_gpu via SDL_shadercross)
 

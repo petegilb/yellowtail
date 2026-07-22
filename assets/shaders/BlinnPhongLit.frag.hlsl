@@ -95,7 +95,7 @@ float4 main(Input input) : SV_Target
     float3 norm    = normalize(input.normal);
     float3 viewDir = normalize(viewPos - input.fragPos);
 
-    // ambient (scene value, added once — not per-light)
+    // ambient (scene value, added once  not per-light)
     float3 result = ambient * diffuseColor;
 
     for (int i = 0; i < lightCount; ++i)

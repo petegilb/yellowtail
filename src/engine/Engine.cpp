@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 
 #include "Profiling.h"
 
@@ -20,6 +21,7 @@
 #include "render/DebugLineRenderer.h"
 #include "render/DebugDraw.h"
 #include "render/BillboardRenderer.h"
+#include "render/PointShadowRenderer.h"
 #include "render/Texture.h"
 #include "components/RenderComponent.h"
 #include "components/TransformComponent.h"
@@ -55,6 +57,7 @@ namespace ytail {
         gridLineRenderer.reset();
         gizmoLineRenderer.reset();
         billboardRenderer.reset();
+        pointShadowRenderer.reset();
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
         if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
         if (device && sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
@@ -114,6 +117,7 @@ namespace ytail {
         gridLineRenderer = std::make_unique<DebugLineRenderer>(device);
         gizmoLineRenderer = std::make_unique<DebugLineRenderer>(device);
         billboardRenderer = std::make_unique<BillboardRenderer>(device);
+        pointShadowRenderer = std::make_unique<PointShadowRenderer>(device, resourceManager.get());
         initializeImGui();
 
         // set app icon
@@ -325,11 +329,11 @@ namespace ytail {
     void Engine::getRenderTargetSize(int& outWidth, int& outHeight) const {
         int pw, ph;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
-        outWidth  = std::max(1, static_cast<int>(pw * resolutionScale));
-        outHeight = std::max(1, static_cast<int>(ph * resolutionScale));
+        outWidth  = std::max(1, static_cast<int>(static_cast<float>(pw) * resolutionScale));
+        outHeight = std::max(1, static_cast<int>(static_cast<float>(ph) * resolutionScale));
     }
 
-    void Engine::ensureSceneColorTexture(int width, int height) {
+    void Engine::ensureSceneColorTexture(const int width, const int height) {
         if (sceneColorTexture && sceneColorW == width && sceneColorH == height) return;
         if (sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
 
@@ -418,12 +422,14 @@ namespace ytail {
         }
         // Some backends (e.g. Wayland) report no exclusive modes; fall back to the desktop size.
         if (out.empty()) {
-            if (const SDL_DisplayMode* dm = SDL_GetDesktopDisplayMode(display)) out.push_back({ dm->w, dm->h });
+            if (const SDL_DisplayMode* dm = SDL_GetDesktopDisplayMode(display)){
+                out.emplace_back(dm->w, dm->h);
+            }
         }
         return out;
     }
 
-    void Engine::setTargetDisplay(SDL_DisplayID display) {
+    void Engine::setTargetDisplay(const SDL_DisplayID display) {
         targetDisplay = display;
         // Drop any fullscreen resolution choice so the new display uses its own desktop mode.
         fullscreenWidth = 0;
@@ -449,20 +455,20 @@ namespace ytail {
 
         const float cx = std::floor(camera.x / spacing) * spacing;
         const float cz = std::floor(camera.z / spacing) * spacing;
-        const float half = extent * spacing;
+        const float half = static_cast<float>(extent) * spacing;
 
-        const glm::vec3 gray{0.4f, 0.4f, 0.4f};
-        const glm::vec3 xAxis{0.85f, 0.25f, 0.25f};
-        const glm::vec3 zAxis{0.3f, 0.5f, 0.9f};
+        constexpr glm::vec3 gray{0.4f, 0.4f, 0.4f};
+        constexpr glm::vec3 xAxis{0.85f, 0.25f, 0.25f};
+        constexpr glm::vec3 zAxis{0.3f, 0.5f, 0.9f};
 
         for (int i = -extent; i <= extent; ++i) {
-            const float x = cx + i * spacing;
+            const float x = cx + static_cast<float>(i) * spacing;
             const glm::vec3& color = std::abs(x) < 0.5f * spacing ? zAxis : gray;  // world x==0 -> Z axis
             out.push_back({ {x, 0.0f, cz - half}, glm::vec4(color, 1.0f) });
             out.push_back({ {x, 0.0f, cz + half}, glm::vec4(color, 1.0f) });
         }
         for (int i = -extent; i <= extent; ++i) {
-            const float z = cz + i * spacing;
+            const float z = cz + static_cast<float>(i) * spacing;
             const glm::vec3& color = std::abs(z) < 0.5f * spacing ? xAxis : gray;  // world z==0 -> X axis
             out.push_back({ {cx - half, 0.0f, z}, glm::vec4(color, 1.0f) });
             out.push_back({ {cx + half, 0.0f, z}, glm::vec4(color, 1.0f) });
@@ -616,6 +622,13 @@ namespace ytail {
                 }
             }
             SDL_EndGPURenderPass(shadowPass);
+        }
+
+        // Point-light (omnidirectional) shadows. Scaffold: allocate the cube array and clear it
+        // once. Face generation lands in the next step.
+        if (showPointShadows) {
+            pointShadowRenderer->ensureTexture();
+            pointShadowRenderer->clearIfPending(commandBuffer);
         }
 
         // Depth+stencil attachment for the geometry pass. Depth clears to the far plane (1.0);
@@ -798,7 +811,7 @@ namespace ytail {
             const float snappedZ = std::floor(camXform->position.z / gridSpacing) * gridSpacing;
             GridFadeUniform gridFade{
                 { snappedX, snappedZ },
-                gridExtent * gridSpacing,
+                static_cast<float>(gridExtent) * gridSpacing,
                 gridOpacity
             };
             gridLineRenderer->draw(renderPass, commandBuffer,
@@ -824,7 +837,7 @@ namespace ytail {
             SDL_GPUSampler* sampler = resourceManager->getSampler(SamplerType::LinearClamp);
             const Texture* lightIcon  = resourceManager->getTexture("textures/icons/lightbulb_icon.png", true).get();
             const Texture* cameraIcon = resourceManager->getTexture("textures/icons/camera_icon.png", true).get();
-            for (const auto& [id, entity] : entities) {
+            for (const auto& entity : entities | std::views::values) {
                 if (entity == nullptr) continue;
                 const auto* transform = entity->getComponent<TransformComponent>();
                 if (transform == nullptr) continue;
@@ -918,7 +931,9 @@ namespace ytail {
         if (child->parent != nullptr) {
             auto& siblings = child->parent->children;
             for (auto it = siblings.begin(); it != siblings.end(); ++it) {
-                if (*it == child) { siblings.erase(it); break; }
+                if (*it == child){
+                    siblings.erase(it); break;
+                }
             }
         }
 
@@ -1003,7 +1018,7 @@ namespace ytail {
         return true;
     }
 
-    void Engine::initializeImGui(){
+    void Engine::initializeImGui() const{
         // Setup Dear ImGui context
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -1074,7 +1089,7 @@ namespace ytail {
         if (showDebugWindow) {
             ImGui::Begin("yellowtail!");
             ImGui::Text("Debug Window...");
-            ImGui::ColorEdit3("Clear Color", (float*)&clear_color);
+            ImGui::ColorEdit3("Clear Color", reinterpret_cast<float*>(&clear_color));
             ImGui::SliderInt("FPS Lock", &framerateLock, -1, 999);
 
             if (ImGui::CollapsingHeader("Display")) {
@@ -1186,7 +1201,7 @@ namespace ytail {
         // Adjust FramebufferScale (not DisplaySize) so the point-based UI layout stays correct.
         ImGuiIO& io = ImGui::GetIO();
         if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f) {
-            io.DisplayFramebufferScale = ImVec2(fbWidth / io.DisplaySize.x, fbHeight / io.DisplaySize.y);
+            io.DisplayFramebufferScale = ImVec2(static_cast<float>(fbWidth) / io.DisplaySize.x, static_cast<float>(fbHeight) / io.DisplaySize.y);
         }
 
         ImGui::Render();

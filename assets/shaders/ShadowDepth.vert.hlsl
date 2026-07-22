@@ -1,5 +1,5 @@
 // Shadow pass vertex stage. Same Mesh layout as BlinnPhongLit (so it draws the same buffers), but
-// only the clip position matters — normal/uv are ignored.
+// only the clip position matters  (normal/uv are ignored).
 struct Input
 {
     float3 position : TEXCOORD0;   // location 0
