@@ -27,7 +27,7 @@ namespace ytail {
     struct GpuLight {
         glm::vec3 position;  float attenuation; // world position (point); attenuation radius
         glm::vec3 direction; int type;          // travel direction (directional); 0 = point, 1 = directional
-        glm::vec3 color;     float _pad;         // emission (color * intensity)
+        glm::vec3 color;     int shadowIndex;    // emission (color * intensity); cube slot, -1 = none
     };
     static_assert(sizeof(GpuLight) == 48, "GpuLight must match the shader Light struct layout");
 
@@ -49,12 +49,16 @@ namespace ytail {
     // Mirrors cbuffer Shadow in BlinnPhongLit.frag.hlsl (b2, space3). Pushed once per frame.
     struct ShadowUniform {
         glm::mat4 lightViewProj;     // world → sun clip space
-        float shadowBias = 0.0005f;  // depth-compare bias, fights acne
-        int shadowEnabled = 0;       // 0 = skip shadow sampling
-        float texelSize = 0.0f;      // 1 / shadowMapSize, PCF tap spacing
+        float shadowBias = 0.0005f;  // sun depth-compare bias, fights acne
+        int shadowEnabled = 0;       // 0 = skip sun shadow sampling
+        float texelSize = 0.0f;      // 1 / shadowMapSize, sun PCF tap spacing
+        float pointBias = 0.0f;      // point cube: slope-scaled bias floor (back-face render needs none)
+        float pointSlope = 0.0f;     // point cube: bias slope, scales with (1 - NdotL)
+        float pointDiskRadius = 0.0032f; // point cube: PCF disk scale (multiplied by distance)
         float _pad0 = 0.0f;
+        float _pad1 = 0.0f;
     };
-    static_assert(sizeof(ShadowUniform) == 80, "ShadowUniform must match the b2 cbuffer layout");
+    static_assert(sizeof(ShadowUniform) == 96, "ShadowUniform must match the b2 cbuffer layout");
 
     class RenderComponent : public Component {
 public:
@@ -64,6 +68,9 @@ public:
         bool outline = false;
         glm::vec3 outlineColor = glm::vec3(1.0f, 0.4f, 0.0f);
         float outlineScale = 1.05f;
+
+        // Whether this mesh is drawn into shadow maps (sun + point cubes). On by default.
+        bool castsShadow = true;
 
         void setMesh(std::shared_ptr<Mesh> inMesh);
         // TODO this just adds materials but what about if we don't have any yet? or resetting?

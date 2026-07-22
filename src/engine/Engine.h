@@ -152,6 +152,10 @@ namespace ytail {
 
         // Omnidirectional shadows for point lights flagged castsShadows.
         bool showPointShadows = true;
+        float pointShadowBias = 0.0f;           // slope-scaled bias floor (back-face render needs none)
+        float pointShadowSlope = 0.0f;          // bias slope (× (1 - NdotL))
+        float pointShadowDiskRadius = 0.0032f;  // PCF softness (× distance)
+        int pointShadowBudget = 4;              // max cube slots re-rendered per frame (rest cached)
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;

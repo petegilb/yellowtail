@@ -576,10 +576,10 @@ namespace ytail {
 
         { // LitStatic
             // vertex : 1 uniform buffer (Camera @ b0 space1)
-            // fragment : 3 samplers (diffuse t0, specular t1, shadow t2) + 3 uniform buffers
-            // (FrameLighting b0 space3, Material b1 space3, Shadow b2 space3)
+            // fragment : 4 samplers (diffuse t0, specular t1, sun shadow t2, point cube t3) + 3
+            // uniform buffers (FrameLighting b0 space3, Material b1 space3, Shadow b2 space3)
             SDL_GPUShader* vs = loadShader(device, "BlinnPhongLit.vert", 0, 1, 0, 0);
-            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 3, 3, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 4, 3, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load LitStatic shaders");
                 return;
@@ -600,7 +600,7 @@ namespace ytail {
         // outline pass reads it as a ring rather than filling the occluded region.
         { // LitStaticStencil
             SDL_GPUShader* vs = loadShader(device, "BlinnPhongLit.vert", 0, 1, 0, 0);
-            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 3, 3, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 4, 3, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load LitStaticStencil shaders");
                 return;
@@ -793,8 +793,11 @@ namespace ytail {
                 return;
             }
 
+            // Render back faces to keep self-shadow acne off the lit side (same trick as the sun
+            // map's FRONT cull). The proj Y-flip in PointShadowRenderer reverses winding, so BACK
+            // here is what FRONT is for the sun.
             PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
-            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_FRONT;
+            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
             builder.depthOnly(shadowMapFormat);
             pipelines[static_cast<size_t>(PipelineType::PointShadowDepth)] =
                 createPipeline(device, builder, "PointShadowDepth");

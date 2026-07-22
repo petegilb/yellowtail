@@ -13,17 +13,22 @@ SamplerState specularSmp : register(s1, space2);
 // Shadow map (sun depth) + its comparison sampler for hardware Percentage-Closer Filtering
 Texture2D              shadowTex : register(t2, space2);
 SamplerComparisonState shadowSmp : register(s2, space2);
+// Point-light omnidirectional shadows: cube array (one slice per shadowed light) storing linear
+// distance-to-light. Shares the comparison sampler kind used for the sun map.
+TextureCubeArray       pointShadowTex : register(t3, space2);
+SamplerComparisonState pointShadowSmp : register(s3, space2);
 
 #define MAX_LIGHTS 16
 #define LIGHT_POINT       0
 #define LIGHT_DIRECTIONAL 1
+#define POINT_PCF_TAPS    20   // 3D PCF taps for point cube shadows
 
 // One scene light. Must match GpuLight in C++ member-for-member (vec3 + trailing scalar per row).
 struct Light
 {
     float3 position;  float attenuation; // world position (point); attenuation radius
     float3 direction; int type;          // travel direction (directional); LIGHT_* above
-    float3 color;     float _pad;        // emission (color * intensity)
+    float3 color;     int shadowIndex;   // emission (color * intensity); cube slot, -1 = none
 };
 
 // Fragment-stage uniform buffers live in space3.
@@ -49,10 +54,14 @@ cbuffer Material : register(b1, space3)
 cbuffer Shadow : register(b2, space3)
 {
     float4x4 lightViewProj; // world -> sun clip space
-    float shadowBias;       // depth-compare bias (fights acne)
+    float shadowBias;       // sun depth-compare bias (fights acne)
     int   shadowEnabled;    // 0 = no caster this frame; skip the sample
-    float texelSize;        // 1 / shadowMapSize, PCF tap spacing
-    float _padShadow;
+    float texelSize;        // 1 / shadowMapSize, sun PCF tap spacing
+    float pointBias;        // point cube: slope-scaled bias floor
+    float pointSlope;       // point cube: bias slope, scales with (1 - NdotL)
+    float pointDiskRadius;  // point cube: PCF disk scale (x distance)
+    float _padShadow0;
+    float _padShadow1;
 };
 
 // 0 = shadowed, 1 = lit. 3x3 PCF.
@@ -82,6 +91,39 @@ float sampleShadow(float3 worldPos, float NdotL)
         [unroll] for (int x = -1; x <= 1; ++x)
             sum += shadowTex.SampleCmpLevelZero(shadowSmp, uv + float2(x, y) * texelSize, compareDepth);
     return sum / 9.0f;
+}
+
+// Cube directions around the main ray, for 3D PCF (LearnOpenGL's set). Averaging the comparison
+// over a small disk of directions softens the cube shadow, like the sun's 3x3 PCF.
+static const float3 kPointPcfOffsets[POINT_PCF_TAPS] = {
+    float3( 1, 1, 1), float3( 1,-1, 1), float3(-1,-1, 1), float3(-1, 1, 1),
+    float3( 1, 1,-1), float3( 1,-1,-1), float3(-1,-1,-1), float3(-1, 1,-1),
+    float3( 1, 1, 0), float3( 1,-1, 0), float3(-1,-1, 0), float3(-1, 1, 0),
+    float3( 1, 0, 1), float3(-1, 0, 1), float3( 1, 0,-1), float3(-1, 0,-1),
+    float3( 0, 1, 1), float3( 0,-1, 1), float3( 0,-1,-1), float3( 0, 1,-1)
+};
+
+// Omnidirectional point-light shadow. 0 = shadowed, 1 = lit. Samples the cube slice by the
+// light->fragment direction and compares against stored linear distance (both normalized by the
+// light radius, matching PointShadowDepth.frag). NdotL feeds a slope-scaled bias.
+float samplePointShadow(float3 worldPos, Light light, float NdotL)
+{
+    float3 toFrag  = worldPos - light.position;
+    float  dist    = length(toFrag);
+    float  current = dist / light.attenuation;
+    // Slope-scaled bias in normalized-distance units (editor-tunable). Small values avoid
+    // peter-panning; back-face rendering in the shadow pass covers the acne side.
+    float  bias    = max(pointSlope * (1.0f - NdotL), pointBias);
+    float  compare = current - bias;
+
+    // 3D PCF: average the comparison over a small disk of directions. The offset scales with
+    // distance so the disk stays ~1 texel wide at any range (a fixed world offset over-blurs).
+    float  diskRadius = dist * pointDiskRadius;
+    float  sum = 0.0f;
+    [unroll] for (int i = 0; i < POINT_PCF_TAPS; ++i)
+        sum += pointShadowTex.SampleCmpLevelZero(pointShadowSmp,
+                   float4(toFrag + kPointPcfOffsets[i] * diskRadius, light.shadowIndex), compare);
+    return sum / float(POINT_PCF_TAPS);
 }
 
 float4 main(Input input) : SV_Target
@@ -115,7 +157,8 @@ float4 main(Input input) : SV_Target
             float  dist    = length(toLight);
             lightDir       = toLight / max(dist, 1e-4f);
             // Smooth range-based falloff: full at the source, 0 at the attenuation radius.
-            float falloff  = saturate(1.0f - (dist * dist) / (light.attenuation * light.attenuation));
+            // Guard the denominator so a zero attenuation radius can't divide by zero (NaN).
+            float falloff  = saturate(1.0f - (dist * dist) / max(light.attenuation * light.attenuation, 1e-8f));
             attenuation    = falloff * falloff;
         }
 
@@ -128,10 +171,12 @@ float4 main(Input input) : SV_Target
         float  spec     = pow(max(dot(norm, halfway), 0.0f), shininess);
         float3 specular = light.color * spec * specularColor;
 
-        // Only the sun (a directional light) casts the shadow map this frame.
+        // The sun casts the 2D shadow map; point lights sample their own cube slice.
         float shadow = 1.0f;
         if (light.type == LIGHT_DIRECTIONAL && shadowEnabled != 0)
             shadow = sampleShadow(input.fragPos, diff);
+        else if (light.type == LIGHT_POINT && light.shadowIndex >= 0)
+            shadow = samplePointShadow(input.fragPos, light, diff);
 
         result += (diffuse + specular) * attenuation * shadow;
     }

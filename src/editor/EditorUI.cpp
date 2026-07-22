@@ -677,6 +677,17 @@ namespace ytail
             ImGui::DragFloat("Bias", &engine->shadowBias, 0.00005f, 0.0f, 0.02f, "%.5f");
             ImGui::SetNextItemWidth(120.0f);
             ImGui::DragFloat3("Focus", &engine->shadowFocus.x, 0.5f);
+
+            ImGui::SeparatorText("Point Lights");
+            ImGui::Checkbox("Point Shadows", &engine->showPointShadows);
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Point Bias", &engine->pointShadowBias, 0.0001f, 0.0f, 0.02f, "%.4f");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Point Bias Slope", &engine->pointShadowSlope, 0.0001f, 0.0f, 0.03f, "%.4f");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Point Softness", &engine->pointShadowDiskRadius, 0.0001f, 0.0f, 0.02f, "%.4f");
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::SliderInt("Refresh Budget", &engine->pointShadowBudget, 1, 4);
             ImGui::EndPopup();
         }
 

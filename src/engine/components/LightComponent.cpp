@@ -30,8 +30,8 @@ namespace ytail {
 
         if (type == LightType::Point) {
             ImGui::DragFloat("Attenuation", &attenuation, 0.1f, 0.0f, 1000.0f);
-        } else if (type == LightType::Directional) {
-            ImGui::Checkbox("Casts Shadows", &castsShadows);
         }
+        // Both light types can cast shadows: directional drives the sun map, point gets a cube.
+        ImGui::Checkbox("Casts Shadows", &castsShadows);
     }
 } // ytail

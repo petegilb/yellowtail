@@ -603,6 +603,7 @@ namespace ytail {
                     const auto* renderComponent = entity->getComponent<RenderComponent>();
                     const auto* transformComponent = entity->getComponent<TransformComponent>();
                     if (renderComponent == nullptr || transformComponent == nullptr) continue;
+                    if (!renderComponent->castsShadow) continue;
                     const auto& mesh = renderComponent->mesh;
                     if (!mesh) continue;
 
@@ -624,11 +625,15 @@ namespace ytail {
             SDL_EndGPURenderPass(shadowPass);
         }
 
-        // Point-light (omnidirectional) shadows. Scaffold: allocate the cube array and clear it
-        // once. Face generation lands in the next step.
+        // Point-light (omnidirectional) shadows: render each shadowed point light's cube faces
+        // before the scene pass. Keep the cube array allocated regardless so the lit pipeline's
+        // slot-3 sampler still has a valid binding when generation is off.
+        pointShadowRenderer->ensureTexture();
         if (showPointShadows) {
-            pointShadowRenderer->ensureTexture();
-            pointShadowRenderer->clearIfPending(commandBuffer);
+            pointShadowRenderer->refreshBudgetPerFrame = pointShadowBudget;
+            pointShadowRenderer->generate(commandBuffer, entities);
+        } else {
+            pointShadowRenderer->reset(); // clear stale slots + stats so nothing samples last frame's cube
         }
 
         // Depth+stencil attachment for the geometry pass. Depth clears to the far plane (1.0);
@@ -665,12 +670,15 @@ namespace ytail {
             if (lightComp == nullptr || lightXform == nullptr) continue;
 
             GpuLight& gpuLight = frameLighting.lights[lightCount];
-            gpuLight.position    = lightXform->position;
+            // World-space so lighting + shadows agree with parented lights (see PointShadowRenderer).
+            gpuLight.position    = glm::vec3(lightXform->worldMatrix()[3]);
             // Forward (-Z) rotated into world space: the direction a directional light travels.
             gpuLight.direction   = glm::normalize(lightXform->rotation * glm::vec3(0.0f, 0.0f, -1.0f));
             gpuLight.color       = lightComp->color * lightComp->intensity;
             gpuLight.attenuation = lightComp->attenuation;
             gpuLight.type        = static_cast<int>(lightComp->type);
+            // Cube slice for a shadowed point light this frame, or -1 (slotForLightId handles both).
+            gpuLight.shadowIndex = showPointShadows ? pointShadowRenderer->slotForLightId(lightIdx) : -1;
             lightCount++;
         }
         frameLighting.lightCount = lightCount;
@@ -683,6 +691,9 @@ namespace ytail {
         shadowUniform.shadowBias    = shadowBias;
         shadowUniform.shadowEnabled = hasShadowCaster ? 1 : 0;
         shadowUniform.texelSize     = 1.0f / static_cast<float>(shadowMapSize);
+        shadowUniform.pointBias       = pointShadowBias;
+        shadowUniform.pointSlope      = pointShadowSlope;
+        shadowUniform.pointDiskRadius = pointShadowDiskRadius;
         SDL_PushGPUFragmentUniformData(commandBuffer, 2, &shadowUniform, sizeof(shadowUniform));
 
         SDL_GPUTextureSamplerBinding shadowBinding{
@@ -690,6 +701,16 @@ namespace ytail {
             .sampler = resourceManager->getSampler(SamplerType::ShadowPCF)
         };
         SDL_BindGPUFragmentSamplers(renderPass, 2, &shadowBinding, 1);
+
+        // Point-light cube array at slot 3 (per-light shadowIndex gates whether it's read).
+        // Skip if creation failed (null); binding a null texture is invalid.
+        if (SDL_GPUTexture* pointCube = pointShadowRenderer->getTexture()) {
+            SDL_GPUTextureSamplerBinding pointShadowBinding{
+                .texture = pointCube,
+                .sampler = resourceManager->getSampler(SamplerType::ShadowPCF)
+            };
+            SDL_BindGPUFragmentSamplers(renderPass, 3, &pointShadowBinding, 1);
+        }
 
         // for each render component and transform component, get the mesh and the material in order to render it
         // TODO optimize this by pipeline binding (rebinding the same pipeline multiple times is a waste of resources)
@@ -1182,6 +1203,11 @@ namespace ytail {
             ImGui::SliderFloat("Ambient Intensity", &ambientIntensity, 0.0f, 10.0f);
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
             ImGui::Text("Draw Calls Last Frame %d", drawCallsLastFrame);
+            ImGui::Text("Point Shadows: %d lights, %d draws, %d culled, %d regen",
+                        pointShadowRenderer->getActiveLights(),
+                        pointShadowRenderer->getCasterDraws(),
+                        pointShadowRenderer->getCulledCasters(),
+                        pointShadowRenderer->getSlotsRegenerated());
             ImGui::End();
         }
 

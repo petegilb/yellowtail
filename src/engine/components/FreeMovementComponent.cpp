@@ -5,6 +5,7 @@
 #include "FreeMovementComponent.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -33,11 +34,14 @@ namespace ytail
         }
         if (transformComp == nullptr) return false;
 
-        // Seed our yaw/pitch from the transform's starting rotation
+        // Seed our yaw/pitch from the transform's starting rotation. Derive them from the forward
+        // vector, matching the qY(yaw)*qX(pitch) build in eventTick — NOT glm::eulerAngles, whose
+        // yaw is asin-limited to [-90,90] and folds larger yaws into pitch/roll (which snaps the
+        // view on scene reload once you've turned past 90 degrees).
         if (!seeded){
-            const glm::vec3 euler = transformComp->getRotationEuler();
-            pitch = euler.x;
-            yaw = euler.y;
+            const glm::vec3 fwd = glm::normalize(transformComp->rotation * constant::WorldForward);
+            pitch = glm::degrees(std::asin(std::clamp(fwd.y, -1.0f, 1.0f)));
+            yaw   = glm::degrees(std::atan2(-fwd.x, -fwd.z));
             seeded = true;
         }
         return true;

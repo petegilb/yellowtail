@@ -40,6 +40,7 @@ namespace ytail {
             }
             ar("materials", materialPaths);
         }
+        ar("castsShadow", castsShadow);
     }
 
     void RenderComponent::setMesh(std::shared_ptr<Mesh> inMesh) {
@@ -52,5 +53,6 @@ namespace ytail {
 
     void RenderComponent::drawInspector() {
         ImGui::ColorEdit3("Outline Color", &outlineColor.x);
+        ImGui::Checkbox("Casts Shadow", &castsShadow);
     }
 } // ytail
