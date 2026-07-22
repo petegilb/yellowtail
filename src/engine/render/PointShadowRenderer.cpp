@@ -84,7 +84,7 @@ namespace ytail {
     }
 
     void PointShadowRenderer::generate(SDL_GPUCommandBuffer* commandBuffer,
-                                       const std::unordered_map<Uint32, std::unique_ptr<Entity>>& entities) {
+                                       const std::vector<Entity>& entities) {
         reset();                        // clears slotForLight + stats; slot cache (slots) persists
         if (cubeArray == nullptr) return;
         SDL_GPUGraphicsPipeline* pipeline = resources->getPipeline(PipelineType::PointShadowDepth);
@@ -110,29 +110,27 @@ namespace ytail {
         // Shadow-casting point lights first (cheap component checks), so a scene without any skips
         // the per-caster gathering below entirely.
         std::vector<Candidate> candidates;
-        for (const auto& [id, entity] : entities) {
-            if (entity == nullptr) continue;
-            const auto* light = entity->getComponent<LightComponent>();
-            const auto* xform = entity->getComponent<TransformComponent>();
+        for (const Entity& entity : entities) {
+            const auto* light = entity.getComponent<LightComponent>();
+            const auto* xform = entity.getComponent<TransformComponent>();
             if (light == nullptr || xform == nullptr) continue;
             if (light->type != LightType::Point || !light->castsShadows) continue;
 
             const float farPlane = light->attenuation;
             if (farPlane <= kFaceNearPlane) continue; // degenerate radius; light stays unshadowed
 
-            candidates.push_back({ id, glm::vec3(xform->worldMatrix()[3]), farPlane,
+            candidates.push_back({ entity.getId(), glm::vec3(xform->worldMatrix()[3]), farPlane,
                                    xform->getWorldVersion() });
         }
         if (candidates.empty()) return; // stale slot owners get reconciled next time a light exists
-        // Lowest ids win slots when over the cap, stable across entity-map rehashes.
+        // Lowest ids win slots when over the cap, stable across dense-array reorders.
         std::ranges::sort(candidates, {}, &Candidate::id);
 
         // World transform + bounding sphere for every shadow caster, computed once for the frame.
         std::vector<CasterInfo> allCasters;
-        for (const auto& [castId, caster] : entities) {
-            if (caster == nullptr) continue;
-            const auto* renderComponent = caster->getComponent<RenderComponent>();
-            const auto* casterXform = caster->getComponent<TransformComponent>();
+        for (const Entity& caster : entities) {
+            const auto* renderComponent = caster.getComponent<RenderComponent>();
+            const auto* casterXform = caster.getComponent<TransformComponent>();
             if (renderComponent == nullptr || casterXform == nullptr) continue;
             if (!renderComponent->castsShadow) continue;
             const auto& mesh = renderComponent->mesh;
@@ -146,7 +144,7 @@ namespace ytail {
                                    glm::max(glm::length(glm::vec3(model[1])),
                                             glm::length(glm::vec3(model[2]))));
             allCasters.push_back({ mesh.get(), model, center, localRadius * maxScale,
-                                   castId, casterXform->getWorldVersion() });
+                                   caster.getId(), casterXform->getWorldVersion() });
         }
 
         // Cull casters per light and build each candidate's signature. Caster contributions are

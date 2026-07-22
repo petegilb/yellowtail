@@ -28,18 +28,18 @@ namespace ytail {
         root["ambientIntensity"] = engine.getAmbientIntensity();
 
         nlohmann::json entitiesJson = nlohmann::json::array();
-        for (const auto& [id, entity] : engine.getEntities()) {
-            if (!entity || !entity->isSerializable()) continue;
+        for (const Entity& entity : engine.getEntityList()) {
+            if (!entity.isSerializable()) continue;
 
             nlohmann::json entityJson;
-            entityJson["id"] = id;
-            entityJson["name"] = entity->getName();
-            if (entity->getParent() != nullptr) {
-                entityJson["parent"] = entity->getParent()->getId();
+            entityJson["id"] = entity.getId();
+            entityJson["name"] = entity.getName();
+            if (entity.getParentId() != NULL_ENTITY) {
+                entityJson["parent"] = entity.getParentId();
             }
 
             nlohmann::json componentsJson = nlohmann::json::array();
-            for (const auto& component : entity->getComponents()) {
+            for (const auto& component : entity.getComponents()) {
                 nlohmann::json compJson;
                 compJson["type"] = component->serialId();
                 Archive ar{ &compJson, false, SCENE_VERSION, engine.getResourceManager() };
@@ -105,8 +105,8 @@ namespace ytail {
     }
 
     static bool entityNameInUse(const Engine& engine, const std::string& name) {
-        for (const auto& [id, entity] : engine.getEntities()) {
-            if (entity && entity->getName() == name) return true;
+        for (const Entity& entity : engine.getEntityList()) {
+            if (entity.getName() == name) return true;
         }
         return false;
     }
@@ -139,31 +139,47 @@ namespace ytail {
     }
 
     // Clone one entity into the scene (components via a save->load round-trip), reparent it
-    // under parentId (0 = root), then recurse into the source's children.
-    static Entity* cloneEntityRecursive(Engine& engine, const Entity* src, Uint32 parentId) {
+    // under parentId (NULL_ENTITY = root), then recurse into the source's children. Works in
+    // ids and snapshots the source up front: addEntity can relocate every entity.
+    static EntityId cloneEntityRecursive(Engine& engine, const EntityId srcId, const EntityId parentId) {
+        std::string srcName;
+        bool srcSerializable = true;
+        std::vector<EntityId> srcChildren;
+        std::vector<nlohmann::json> compJsons;
+        {
+            const Entity* src = engine.getEntity(srcId);
+            if (src == nullptr) return NULL_ENTITY;
+            srcName = src->getName();
+            srcSerializable = src->isSerializable();
+            srcChildren = src->getChildIds();
+            for (const auto& component : src->getComponents()) {
+                nlohmann::json compJson;
+                compJson["type"] = component->serialId();
+                Archive out{ &compJson, false, SCENE_VERSION, engine.getResourceManager() };
+                component->serialize(out);
+                compJsons.push_back(std::move(compJson));
+            }
+        } // src goes stale at the addEntity below; everything needed is snapshotted
+
         Entity* copy = engine.addEntity();
-        copy->setName(src->getName());
-        copy->setSerializable(src->isSerializable());
+        const EntityId copyId = copy->getId();
+        copy->setName(srcName);
+        copy->setSerializable(srcSerializable);
 
-        for (const auto& component : src->getComponents()) {
-            nlohmann::json compJson;
-            compJson["type"] = component->serialId();
-            Archive out{ &compJson, false, SCENE_VERSION, engine.getResourceManager() };
-            component->serialize(out);
-
-            std::unique_ptr<Component> clone = engine.getComponentRegistry().create(component->serialId());
+        for (nlohmann::json& compJson : compJsons) {
+            std::unique_ptr<Component> clone = engine.getComponentRegistry().create(compJson.at("type").get<std::string>());
             if (!clone) continue;
             Component* attached = copy->addComponent(std::move(clone));
             Archive in{ &compJson, true, SCENE_VERSION, engine.getResourceManager() };
             attached->serialize(in);
         }
 
-        if (parentId != 0) engine.reparent(copy->getId(), parentId);
+        if (parentId != NULL_ENTITY) engine.reparent(copyId, parentId);
 
-        for (const Entity* child : src->getChildren()) {
-            cloneEntityRecursive(engine, child, copy->getId());
+        for (const EntityId childId : srcChildren) {
+            cloneEntityRecursive(engine, childId, copyId); // relocates entities; copy is stale after
         }
-        return copy;
+        return copyId;
     }
 
     Uint32 duplicateEntity(Engine& engine, Uint32 sourceId) {
@@ -172,13 +188,13 @@ namespace ytail {
 
         // Chosen before cloning (the clones don't exist yet, so they can't shadow the name).
         const std::string newName = nextEntityName(engine, src->getName());
-        const Entity* parent = src->getParent();
-        Entity* copy = cloneEntityRecursive(engine, src, parent ? parent->getId() : 0);
-        if (!copy) return 0;
+        const EntityId parentId = src->getParentId(); // src goes stale once cloning starts
+        const EntityId copyId = cloneEntityRecursive(engine, sourceId, parentId);
+        if (copyId == NULL_ENTITY) return 0;
 
         // Only the top-level duplicate is renamed; children keep their names.
-        copy->setName(newName);
-        return copy->getId();
+        engine.getEntity(copyId)->setName(newName);
+        return copyId;
     }
 
     bool loadScene(Engine& engine, const std::string& path) {

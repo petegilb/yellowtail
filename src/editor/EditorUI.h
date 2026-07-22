@@ -67,8 +67,9 @@ namespace ytail {
         void drawInspector();
         void drawSaveAsDialog();
 
-        // one entity row in the outliner tree, recursing into its children
-        void drawOutlinerNode(Entity* entity);
+        // one entity row in the outliner tree, recursing into its children. Takes an id: actions
+        // inside (Duplicate) can relocate entity storage, so no Entity* survives the call.
+        void drawOutlinerNode(Uint32 entityId);
         // inspector combo to set the selected entity's parent
         void drawParentSelector(Entity* entity);
         // mesh + material slot pickers shown under a RenderComponent in the inspector

@@ -5,7 +5,6 @@
 #ifndef YELLOWTAIL_ENGINE_H
 #define YELLOWTAIL_ENGINE_H
 
-#include <unordered_map>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -13,7 +12,7 @@
 #include "imgui.h"
 #include <glm/glm.hpp>
 
-#include "Entity.h"
+#include "World.h"
 #include "GameplayStatics.h"
 #include "render/BillboardRenderer.h"
 #include "render/DebugDraw.h"
@@ -95,22 +94,23 @@ namespace ytail {
 
         Entity* addEntity();
         // Create an entity with a set id, used when loading a scene.
-        Entity* addEntityWithId(Uint32 id);
+        Entity* addEntityWithId(EntityId id);
         // Remove every entity. Used before loading a scene.
         void clearScene();
-        Entity* getEntity(Uint32 id);
+        Entity* getEntity(EntityId id);
 
-        // Parent childId under parentId, keeping both link sides in sync. parentId == 0 detaches
+        // Parent childId under parentId, keeping both link sides in sync. NULL_ENTITY detaches
         // to root. Returns false (no-op) on unknown ids, self-parenting, or a cycle.
-        bool reparent(Uint32 childId, Uint32 parentId);
+        bool reparent(EntityId childId, EntityId parentId);
 
         // Remove an entity and its whole subtree (all descendants go with it).
-        void removeEntity(Uint32 id);
+        void removeEntity(EntityId id);
 
-        // All entities, for the editor outliner. Lookups by id still go through getEntity().
-        [[nodiscard]] const std::unordered_map<Uint32, std::unique_ptr<Entity>>& getEntities() const { return entities; }
+        // All entities, densely packed, for iteration (editor outliner, render loops). Pointers
+        // into it are transient: any add/remove can relocate entities.
+        [[nodiscard]] const std::vector<Entity>& getEntityList() const { return world.entities(); }
 
-        void setActiveCamera(Uint32 id);
+        void setActiveCamera(EntityId id);
 
         // View + projection matrices for the active camera. False if there's no active camera.
         [[nodiscard]] bool getCameraMatrices(glm::mat4& outView, glm::mat4& outProjection) const;
@@ -217,7 +217,6 @@ namespace ytail {
 
         // locks the framerate if greater than 0
         int framerateLock = 0;
-        Uint32 entityCounter = 0;
         int drawCallsLastFrame = 0;
 
         // Nonzero while the tick loops are iterating `entities`. addEntity/removeEntity assert on
@@ -226,11 +225,12 @@ namespace ytail {
 
         // world stuff
         glm::vec3 ambientLight{0.0f}; // currently set to ambientDebug
-        std::unordered_map<Uint32, std::unique_ptr<Entity>> entities;
+        World world;
 
-        // The camera to render from this frame. Non-owning - the entity itself lives in
-        // `entities`. Must have a TransformComponent (view) + CameraComponent (projection).
-        Entity* activeCamera = nullptr;
+        // The camera to render from this frame. Resolved through the world each use, so a
+        // deleted camera fails the generation check instead of dangling. Must have a
+        // TransformComponent (view) + CameraComponent (projection).
+        EntityId activeCameraId = NULL_ENTITY;
 
         // ResourceManager that handles the lifetimes of objects loaded into memory
         std::unique_ptr<ytail::ResourceManager> resourceManager;

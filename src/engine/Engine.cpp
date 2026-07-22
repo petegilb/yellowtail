@@ -53,7 +53,7 @@ namespace ytail {
         if (ImGui::GetCurrentContext()) shutdownImGui();
 
         // Release everything that owns GPU resources BEFORE destroying the device.
-        entities.clear(); // RenderComponents drop their shared_ptr<Mesh>/Material
+        world.clear(); // RenderComponents drop their shared_ptr<Mesh>/Material
         debugLineRenderer.reset(); // frees the debug line vertex/transfer buffers
         gridLineRenderer.reset();
         gizmoLineRenderer.reset();
@@ -206,8 +206,8 @@ namespace ytail {
         updateTick();
         if (app) app->tick(deltaTime);
         ++entityIterationDepth;
-        for (const auto& [id, entity] : entities) {
-            if (entity) entity->tick(deltaTime);
+        for (Entity& entity : world.entities()) {
+            entity.tick(deltaTime);
         }
         --entityIterationDepth;
 
@@ -228,8 +228,8 @@ namespace ytail {
         }
         if (app) app->fixedTick(deltaTime);
         ++entityIterationDepth;
-        for (const auto& [id, entity] : entities) {
-            if (entity) entity->fixedTick(deltaTime);
+        for (Entity& entity : world.entities()) {
+            entity.fixedTick(deltaTime);
         }
         --entityIterationDepth;
         tickNumber++;
@@ -242,8 +242,8 @@ namespace ytail {
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (app) app->eventTick(event);
             ++entityIterationDepth;
-            for (const auto& [id, entity] : entities) {
-                if (entity) entity->eventTick(event);
+            for (Entity& entity : world.entities()) {
+                entity.eventTick(event);
             }
             --entityIterationDepth;
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)) {
@@ -316,17 +316,16 @@ namespace ytail {
     }
 
     bool Engine::computeSunLightMatrix(glm::mat4& outLightViewProj) const {
-        // Lowest-id directional light flagged to cast shadows drives the map. Lowest id (not map
-        // order) so the pick is stable when the entity map rehashes.
+        // Lowest-id directional light flagged to cast shadows drives the map. Lowest id (not
+        // storage order) so the pick is stable when swap-remove reorders the dense array.
         const TransformComponent* sunTransform = nullptr;
-        Uint32 sunId = 0;
-        for (const auto& [id, entity] : entities) {
-            if (entity == nullptr) continue;
-            const auto* light = entity->getComponent<LightComponent>();
-            const auto* transform = entity->getComponent<TransformComponent>();
+        EntityId sunId = NULL_ENTITY;
+        for (const Entity& entity : world.entities()) {
+            const auto* light = entity.getComponent<LightComponent>();
+            const auto* transform = entity.getComponent<TransformComponent>();
             if (light == nullptr || transform == nullptr) continue;
             if (light->type != LightType::Directional || !light->castsShadows) continue;
-            if (sunTransform == nullptr || id < sunId) { sunTransform = transform; sunId = id; }
+            if (sunTransform == nullptr || entity.getId() < sunId) { sunTransform = transform; sunId = entity.getId(); }
         }
         if (sunTransform == nullptr) return false;
 
@@ -496,14 +495,14 @@ namespace ytail {
 
     // Light gizmos tinted with each light's color
     static void buildLightGizmos(DebugDraw& debug,
-        const std::unordered_map<Uint32, std::unique_ptr<Entity>>& entities,
+        const std::vector<Entity>& entities,
         Uint32 selectedEntity
     ) {
         debug.clear();
-        for (const auto& [id, entity] : entities) {
-            if (entity == nullptr) continue;
-            const auto* light = entity->getComponent<LightComponent>();
-            const auto* transform = entity->getComponent<TransformComponent>();
+        for (const Entity& entity : entities) {
+            const EntityId id = entity.getId();
+            const auto* light = entity.getComponent<LightComponent>();
+            const auto* transform = entity.getComponent<TransformComponent>();
             if (light == nullptr || transform == nullptr) continue;
 
             const glm::vec4 color(light->color, 1.0f);
@@ -525,6 +524,7 @@ namespace ytail {
 
         // just found this reference: https://dawaralvi.github.io/sdl-gpu/
         // get the active camera
+        const Entity* activeCamera = world.getEntity(activeCameraId);
         if (activeCamera == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Render camera is null!");
             return -1;
@@ -593,7 +593,7 @@ namespace ytail {
 
         // Editor light gizmos: rebuild + stage (same before-pass copy rule).
         if (showLightGizmos && gizmoLineRenderer) {
-            buildLightGizmos(gizmoDraw, entities, selectedEntity);
+            buildLightGizmos(gizmoDraw, world.entities(), selectedEntity);
             gizmoLineRenderer->upload(commandBuffer, gizmoDraw.vertices());
         }
 
@@ -619,10 +619,9 @@ namespace ytail {
             SDL_GPUGraphicsPipeline* shadowPipeline = resourceManager->getPipeline(PipelineType::ShadowDepth);
             if (shadowPipeline) {
                 SDL_BindGPUGraphicsPipeline(shadowPass, shadowPipeline);
-                for (const auto& [idx, entity] : entities) {
-                    if (entity == nullptr) continue;
-                    const auto* renderComponent = entity->getComponent<RenderComponent>();
-                    const auto* transformComponent = entity->getComponent<TransformComponent>();
+                for (const Entity& entity : world.entities()) {
+                    const auto* renderComponent = entity.getComponent<RenderComponent>();
+                    const auto* transformComponent = entity.getComponent<TransformComponent>();
                     if (renderComponent == nullptr || transformComponent == nullptr) continue;
                     if (!renderComponent->castsShadow) continue;
                     const auto& mesh = renderComponent->mesh;
@@ -652,7 +651,7 @@ namespace ytail {
         pointShadowRenderer->ensureTexture();
         if (showPointShadows) {
             pointShadowRenderer->refreshBudgetPerFrame = pointShadowBudget;
-            pointShadowRenderer->generate(commandBuffer, entities);
+            pointShadowRenderer->generate(commandBuffer, world.entities());
         } else {
             pointShadowRenderer->reset(); // clear stale slots + stats so nothing samples last frame's cube
         }
@@ -682,15 +681,15 @@ namespace ytail {
         FrameLightingUniform frameLighting{};
         frameLighting.viewPos = camXform->getPosition();
         frameLighting.ambient = ambientLight;
-        // Gather + sort by id so which lights make the MaxLights cut is stable across map rehashes.
-        struct SceneLight { Uint32 id; const LightComponent* light; const TransformComponent* transform; };
+        // Gather + sort by id so which lights make the MaxLights cut is stable across
+        // swap-remove reorders of the dense array.
+        struct SceneLight { EntityId id; const LightComponent* light; const TransformComponent* transform; };
         std::vector<SceneLight> sceneLights;
-        for (const auto& [lightIdx, lightEntity] : entities) {
-            if (lightEntity == nullptr) continue;
-            const auto* lightComp = lightEntity->getComponent<LightComponent>();
-            const auto* lightXform = lightEntity->getComponent<TransformComponent>();
+        for (const Entity& lightEntity : world.entities()) {
+            const auto* lightComp = lightEntity.getComponent<LightComponent>();
+            const auto* lightXform = lightEntity.getComponent<TransformComponent>();
             if (lightComp == nullptr || lightXform == nullptr) continue;
-            sceneLights.push_back({ lightIdx, lightComp, lightXform });
+            sceneLights.push_back({ lightEntity.getId(), lightComp, lightXform });
         }
         std::ranges::sort(sceneLights, {}, &SceneLight::id);
 
@@ -745,10 +744,9 @@ namespace ytail {
 
         // for each render component and transform component, get the mesh and the material in order to render it
         // TODO optimize this by pipeline binding (rebinding the same pipeline multiple times is a waste of resources)
-        for (const auto& [idx, entity]: entities) {
-            if (entity == nullptr) continue;
-            const auto* renderComponent = entity->getComponent<RenderComponent>();
-            const auto* transformComponent = entity->getComponent<TransformComponent>();
+        for (const Entity& entity : world.entities()) {
+            const auto* renderComponent = entity.getComponent<RenderComponent>();
+            const auto* transformComponent = entity.getComponent<TransformComponent>();
             if (renderComponent == nullptr || transformComponent == nullptr) continue;
 
             auto& mesh = renderComponent->mesh;
@@ -823,10 +821,9 @@ namespace ytail {
         SDL_GPUGraphicsPipeline* outlinePipeline = resourceManager->getPipeline(PipelineType::Outline);
         if (outlinePipeline) {
             SDL_BindGPUGraphicsPipeline(renderPass, outlinePipeline);
-            for (const auto& [idx, entity] : entities) {
-                if (entity == nullptr) continue;
-                const auto* renderComponent = entity->getComponent<RenderComponent>();
-                const auto* transformComponent = entity->getComponent<TransformComponent>();
+            for (const Entity& entity : world.entities()) {
+                const auto* renderComponent = entity.getComponent<RenderComponent>();
+                const auto* transformComponent = entity.getComponent<TransformComponent>();
                 if (renderComponent == nullptr || transformComponent == nullptr) continue;
                 if (!renderComponent->outline) continue;
                 const auto& mesh = renderComponent->mesh;
@@ -888,15 +885,14 @@ namespace ytail {
             SDL_GPUSampler* sampler = resourceManager->getSampler(SamplerType::LinearClamp);
             const Texture* lightIcon  = resourceManager->getTexture("textures/icons/lightbulb_icon.png", true).get();
             const Texture* cameraIcon = resourceManager->getTexture("textures/icons/camera_icon.png", true).get();
-            for (const auto& entity : entities | std::views::values) {
-                if (entity == nullptr) continue;
-                const auto* transform = entity->getComponent<TransformComponent>();
+            for (const Entity& entity : world.entities()) {
+                const auto* transform = entity.getComponent<TransformComponent>();
                 if (transform == nullptr) continue;
 
                 const Texture* icon = nullptr;
-                if (entity->getComponent<LightComponent>() != nullptr) {
+                if (entity.getComponent<LightComponent>() != nullptr) {
                     icon = lightIcon;
-                } else if (entity->getComponent<CameraComponent>() != nullptr && entity.get() != activeCamera) {
+                } else if (entity.getComponent<CameraComponent>() != nullptr && entity.getId() != activeCameraId) {
                     icon = cameraIcon;
                 }
                 if (icon == nullptr) continue;
@@ -945,100 +941,45 @@ namespace ytail {
 
     Entity* Engine::addEntity() {
         SDL_assert(entityIterationDepth == 0 && "spawn during entity tick; defer to after the loop");
-        entityCounter++;
-        entities[entityCounter] = std::make_unique<Entity>(entityCounter);
-        return entities[entityCounter].get();
+        return world.addEntity();
     }
 
-    Entity* Engine::addEntityWithId(const Uint32 id) {
+    Entity* Engine::addEntityWithId(const EntityId id) {
         SDL_assert(entityIterationDepth == 0 && "spawn during entity tick; defer to after the loop");
-        if (entities.contains(id)) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Entity id %u already exists; refusing duplicate", id);
-            return nullptr;
-        }
-        entities[id] = std::make_unique<Entity>(id);
-        // keep the counter ahead of every loaded id so new entities don't reuse one
-        if (id > entityCounter) entityCounter = id;
-        return entities[id].get();
+        return world.addEntityWithId(id);
     }
 
     void Engine::clearScene() {
         SDL_assert(entityIterationDepth == 0 && "clear during entity tick; defer to after the loop");
-        entities.clear();
-        activeCamera = nullptr;
-        entityCounter = 0;
+        world.clear();
+        activeCameraId = NULL_ENTITY;
     }
 
-    Entity* Engine::getEntity(const Uint32 id) {
-        if (!entities.contains(id)) return nullptr;
-        return entities[id].get();
+    Entity* Engine::getEntity(const EntityId id) {
+        return world.getEntity(id);
     }
 
-    bool Engine::reparent(const Uint32 childId, const Uint32 parentId) {
-        Entity* child = getEntity(childId);
-        if (child == nullptr) return false;
-
-        Entity* newParent = nullptr;
-        if (parentId != 0) {
-            if (childId == parentId) return false;
-            newParent = getEntity(parentId);
-            if (newParent == nullptr) return false;
-            // Walk up from the prospective parent; if we reach child, this would form a cycle.
-            for (Entity* ancestor = newParent; ancestor != nullptr; ancestor = ancestor->parent) {
-                if (ancestor == child) return false;
-            }
-        }
-
-        if (child->parent != nullptr) {
-            auto& siblings = child->parent->children;
-            for (auto it = siblings.begin(); it != siblings.end(); ++it) {
-                if (*it == child){
-                    siblings.erase(it); break;
-                }
-            }
-        }
-
-        child->parent = newParent;
-        if (newParent != nullptr) newParent->children.push_back(child);
-        return true;
+    bool Engine::reparent(const EntityId childId, const EntityId parentId) {
+        return world.reparent(childId, parentId);
     }
 
-    void Engine::removeEntity(const Uint32 id) {
+    void Engine::removeEntity(const EntityId id) {
         SDL_assert(entityIterationDepth == 0 && "destroy during entity tick; defer to after the loop");
-        Entity* entity = getEntity(id);
-        if (entity == nullptr) return;
-
-        if (entity->parent != nullptr) {
-            auto& siblings = entity->parent->children;
-            for (auto it = siblings.begin(); it != siblings.end(); ++it) {
-                if (*it == entity) { siblings.erase(it); break; }
-            }
-            entity->parent = nullptr;
-        }
-
-        // Gather the subtree (this id plus every descendant) before erasing anything.
-        std::vector<Uint32> toRemove{ id };
-        for (size_t i = 0; i < toRemove.size(); ++i) {
-            Entity* current = getEntity(toRemove[i]);
-            if (current == nullptr) continue;
-            for (Entity* child : current->children) toRemove.push_back(child->getId());
-        }
-
-        for (const Uint32 removeId : toRemove) {
-            if (activeCamera == getEntity(removeId)) activeCamera = nullptr;
-            entities.erase(removeId);
-        }
+        world.removeEntity(id);
+        // If the camera was in the removed subtree, its id no longer resolves.
+        if (world.getEntity(activeCameraId) == nullptr) activeCameraId = NULL_ENTITY;
     }
 
-    void Engine::setActiveCamera(Uint32 id) {
-        if (!entities.contains(id)) {
+    void Engine::setActiveCamera(const EntityId id) {
+        if (world.getEntity(id) == nullptr) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "setActiveCamera tried to set to a null entity! %d", id);
             return;
         }
-        activeCamera = entities[id].get();
+        activeCameraId = id;
     }
 
     bool Engine::getCameraMatrices(glm::mat4& outView, glm::mat4& outProjection) const {
+        const Entity* activeCamera = world.getEntity(activeCameraId);
         if (activeCamera == nullptr) return false;
         auto* camTransform = activeCamera->getComponent<TransformComponent>();
         auto* camComp  = activeCamera->getComponent<CameraComponent>();

@@ -29,7 +29,7 @@ namespace ytail {
         // Render the 6 cube faces for each shadow-casting point light (up to the cap) and record
         // its slot. Call once per frame, before the scene pass. Begins its own render passes.
         void generate(SDL_GPUCommandBuffer* commandBuffer,
-                      const std::unordered_map<Uint32, std::unique_ptr<Entity>>& entities);
+                      const std::vector<Entity>& entities);
 
         // Clear this frame's slot assignments and stats. Call when generation is skipped.
         void reset();

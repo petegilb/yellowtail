@@ -95,10 +95,9 @@ namespace ytail
 
         Uint32 picked = 0;
         float bestT = FLT_MAX;
-        for (const auto& [id, entity] : engine->getEntities()) {
-            if (!entity) continue;
-            auto* transform = entity->getComponent<TransformComponent>();
-            auto* render = entity->getComponent<RenderComponent>();
+        for (const Entity& entity : engine->getEntityList()) {
+            auto* transform = entity.getComponent<TransformComponent>();
+            auto* render = entity.getComponent<RenderComponent>();
             if (!transform || !render || !render->mesh) continue;
 
             // Transform the ray into mesh-local space. localDir is left un-normalized so the hit
@@ -110,19 +109,18 @@ namespace ytail
             float t;
             if (rayAabb(localOrigin, localDir, render->mesh->aabbMin, render->mesh->aabbMax, t) && t < bestT) {
                 bestT = t;
-                picked = id;
+                picked = entity.getId();
             }
         }
 
         // Lights and inactive cameras have no mesh; pick their billboard icons via a small
         // world-space box at the entity position (t stays comparable to the mesh hits above).
-        for (const auto& [id, entity] : engine->getEntities()) {
-            if (!entity) continue;
-            auto* transform = entity->getComponent<TransformComponent>();
+        for (const Entity& entity : engine->getEntityList()) {
+            auto* transform = entity.getComponent<TransformComponent>();
             if (!transform) continue;
-            const bool hasLight  = entity->getComponent<LightComponent>() != nullptr;
-            const bool hasCamera = entity->getComponent<CameraComponent>() != nullptr
-                                   && id != editor->getEditorCameraId();
+            const bool hasLight  = entity.getComponent<LightComponent>() != nullptr;
+            const bool hasCamera = entity.getComponent<CameraComponent>() != nullptr
+                                   && entity.getId() != editor->getEditorCameraId();
             if (!hasLight && !hasCamera) continue;
 
             // World-space position, matching where the billboard icon is drawn (parented entities).
@@ -132,7 +130,7 @@ namespace ytail
             float t;
             if (rayAabb(origin, dir, boxMin, boxMax, t) && t < bestT) {
                 bestT = t;
-                picked = id;
+                picked = entity.getId();
             }
         }
 
@@ -159,37 +157,40 @@ namespace ytail
         }
     }
 
-    void EditorUI::drawOutlinerNode(Entity* entity) {
+    void EditorUI::drawOutlinerNode(const Uint32 entityId) {
+        const Entity* entity = engine->getEntity(entityId);
         if (entity == nullptr) return;
 
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
-        if (entity->getId() == selectedEntity) flags |= ImGuiTreeNodeFlags_Selected;
-        if (entity->getChildren().empty()) flags |= ImGuiTreeNodeFlags_Leaf;
+        if (entityId == selectedEntity) flags |= ImGuiTreeNodeFlags_Selected;
+        if (entity->getChildIds().empty()) flags |= ImGuiTreeNodeFlags_Leaf;
 
         const bool open = ImGui::TreeNodeEx(
-            reinterpret_cast<void*>(static_cast<uintptr_t>(entity->getId())),
+            reinterpret_cast<void*>(static_cast<uintptr_t>(entityId)),
             flags, "%s", entity->getName().c_str());
 
         // Selecting the row, but not when the click only toggled the expand arrow.
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
-            setSelected(entity->getId());
+            setSelected(entityId);
         }
 
         // Right-click row: select it, then offer entity actions.
         if (ImGui::BeginPopupContextItem()) {
-            setSelected(entity->getId());
-            if (entity->getId() != editor->getEditorCameraId() && ImGui::MenuItem("Duplicate")) {
-                if (const Uint32 copy = duplicateEntity(*engine, entity->getId())) setSelected(copy);
+            setSelected(entityId);
+            if (entityId != editor->getEditorCameraId() && ImGui::MenuItem("Duplicate")) {
+                if (const Uint32 copy = duplicateEntity(*engine, entityId)) setSelected(copy);
             }
             ImGui::EndPopup();
         }
 
         if (open) {
-            std::vector<Uint32> childIds;
-            childIds.reserve(entity->getChildren().size());
-            for (Entity* child : entity->getChildren()) childIds.push_back(child->getId());
-            std::sort(childIds.begin(), childIds.end());
-            for (const Uint32 childId : childIds) drawOutlinerNode(engine->getEntity(childId));
+            // Re-fetch: Duplicate above adds entities, which relocates storage.
+            entity = engine->getEntity(entityId);
+            if (entity != nullptr) {
+                std::vector<Uint32> childIds = entity->getChildIds();
+                std::sort(childIds.begin(), childIds.end());
+                for (const Uint32 childId : childIds) drawOutlinerNode(childId);
+            }
             ImGui::TreePop();
         }
     }
@@ -214,8 +215,8 @@ namespace ytail
         }
 
         std::vector<Uint32> ids;
-        for (const auto& [id, other] : engine->getEntities()) {
-            if (id != entity->getId()) ids.push_back(id);
+        for (const Entity& other : engine->getEntityList()) {
+            if (other.getId() != entity->getId()) ids.push_back(other.getId());
         }
         std::sort(ids.begin(), ids.end());
         for (const Uint32 id : ids) {
@@ -707,11 +708,11 @@ namespace ytail
             setSelected(created->getId());
         }
         std::vector<Uint32> rootIds;
-        for (const auto& [id, entity] : engine->getEntities()) {
-            if (entity && entity->getParent() == nullptr) rootIds.push_back(id);
+        for (const Entity& entity : engine->getEntityList()) {
+            if (entity.getParentId() == NULL_ENTITY) rootIds.push_back(entity.getId());
         }
         std::sort(rootIds.begin(), rootIds.end());
-        for (const Uint32 id : rootIds) drawOutlinerNode(engine->getEntity(id));
+        for (const Uint32 id : rootIds) drawOutlinerNode(id);
         ImGui::End();
     }
 
