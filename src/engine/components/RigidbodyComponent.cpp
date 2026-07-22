@@ -40,8 +40,8 @@ namespace ytail {
         if (body == InvalidBody) {
             BodyDef def;
             def.colliders = colliders;
-            def.position = transformComp->position;
-            def.rotation = transformComp->rotation;
+            def.position = transformComp->getPosition();
+            def.rotation = transformComp->getRotation();
             def.type = type;
             body = PhysicsManager::get().createBody(def);
         }
@@ -55,7 +55,10 @@ namespace ytail {
         // The sim works in world space and this writes into the local position/rotation, so a
         // dynamic body is expected to be a root entity. Parenting one is unsupported (sim wins).
         if (type == BodyType::Dynamic) {
-            PhysicsManager::get().getBodyTransform(body, transformComp->position, transformComp->rotation);
+            glm::vec3 pos; glm::quat rot;
+            PhysicsManager::get().getBodyTransform(body, pos, rot);
+            transformComp->setPosition(pos);
+            transformComp->setRotation(rot);
         }
     }
 
@@ -65,7 +68,7 @@ namespace ytail {
 
         // When we're paused we take the transform from the gizmo but if we're simulating we trust the simulation
         if (!GameplayStatics::isSimulating()) {
-            PhysicsManager::get().setBodyTransform(body, transformComp->position, transformComp->rotation);
+            PhysicsManager::get().setBodyTransform(body, transformComp->getPosition(), transformComp->getRotation());
         }
     }
 

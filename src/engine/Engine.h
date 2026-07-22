@@ -257,6 +257,8 @@ namespace ytail {
         ImVec4 ambientDebug = ImVec4(1.f, 1.f, 1.f, 1.00f);
         float ambientIntensity = 0.2f;
         bool showDebugWindow = false;
+
+        bool shaderCrossInitialized = false;
 };
 
 } // ytail

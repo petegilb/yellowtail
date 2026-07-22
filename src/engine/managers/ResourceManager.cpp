@@ -376,6 +376,14 @@ namespace ytail {
                 } else if (t.contains("path")) {
                     texture = getTexture(t.at("path").get<std::string>(), t.value("srgb", false));
                 }
+                if (!texture){
+                    // Keep the material usable (and cached) with an obvious placeholder rather
+                    // than failing it whole and re-parsing the file on every lookup.
+                    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                        "Bad texture entry in material %s; using magenta fallback", path.c_str());
+                    texture = getSolidTexture(255, 0, 255);
+                    if (!texture) return nullptr; // GPU texture creation failing is unrecoverable
+                }
                 material->textures.push_back({ texture, sampler, samplerType });
             }
         }
@@ -582,15 +590,15 @@ namespace ytail {
             SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 4, 3, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load LitStatic shaders");
-                return;
+            }
+            else{
+                // Pure defaults: opaque, depth test+write, back-face cull.
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+                pipelines[static_cast<size_t>(PipelineType::LitStatic)] = createPipeline(device, builder, "LitStatic");
             }
 
-            // Pure defaults: opaque, depth test+write, back-face cull.
-            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
-            pipelines[static_cast<size_t>(PipelineType::LitStatic)] = createPipeline(device, builder, "LitStatic");
-
-            SDL_ReleaseGPUShader(device, vs);
-            SDL_ReleaseGPUShader(device, fs);
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
 
@@ -603,27 +611,26 @@ namespace ytail {
             SDL_GPUShader* fs = loadShader(device, "BlinnPhongLit.frag", 4, 3, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load LitStaticStencil shaders");
-                return;
             }
-
-            // Same as LitStatic, but stamp the stencil (ref set to 1 at draw time) for outlined
-            // objects. REPLACE on pass and depth-fail marks the full silhouette, including parts
-            // hidden behind nearer geometry, so the outline pass reads it as a ring.
-            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
-            auto& ds = builder.info.depth_stencil_state;
-            ds.enable_stencil_test = true;
-            ds.compare_mask = 0xFF;
-            ds.write_mask = 0xFF;
-            ds.front_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
-            ds.front_stencil_state.pass_op = SDL_GPU_STENCILOP_REPLACE;
-            ds.front_stencil_state.fail_op = SDL_GPU_STENCILOP_KEEP;
-            ds.front_stencil_state.depth_fail_op = SDL_GPU_STENCILOP_REPLACE;
-            ds.back_stencil_state = ds.front_stencil_state;
-            pipelines[static_cast<size_t>(PipelineType::LitStaticStencil)] =
-                createPipeline(device, builder, "LitStaticStencil");
-
-            SDL_ReleaseGPUShader(device, vs);
-            SDL_ReleaseGPUShader(device, fs);
+            else{
+                // Same as LitStatic, but stamp the stencil (ref set to 1 at draw time) for outlined
+                // objects. REPLACE on pass and depth-fail marks the full silhouette, including parts
+                // hidden behind nearer geometry, so the outline pass reads it as a ring.
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+                auto& ds = builder.info.depth_stencil_state;
+                ds.enable_stencil_test = true;
+                ds.compare_mask = 0xFF;
+                ds.write_mask = 0xFF;
+                ds.front_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
+                ds.front_stencil_state.pass_op = SDL_GPU_STENCILOP_REPLACE;
+                ds.front_stencil_state.fail_op = SDL_GPU_STENCILOP_KEEP;
+                ds.front_stencil_state.depth_fail_op = SDL_GPU_STENCILOP_REPLACE;
+                ds.back_stencil_state = ds.front_stencil_state;
+                pipelines[static_cast<size_t>(PipelineType::LitStaticStencil)] =
+                    createPipeline(device, builder, "LitStaticStencil");
+            }
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
 
@@ -636,15 +643,14 @@ namespace ytail {
             SDL_GPUShader* fs = loadShader(device, "Unlit.frag", 0, 0, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load UnlitStatic shaders");
-                return;
             }
-
-            // Pure defaults (unlit objects don't participate in outlining, so no stencil).
-            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
-            pipelines[static_cast<size_t>(PipelineType::UnlitStatic)] = createPipeline(device, builder, "UnlitStatic");
-
-            SDL_ReleaseGPUShader(device, vs);
-            SDL_ReleaseGPUShader(device, fs);
+            else{
+                // Pure defaults (unlit objects don't participate in outlining, so no stencil).
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+                pipelines[static_cast<size_t>(PipelineType::UnlitStatic)] = createPipeline(device, builder, "UnlitStatic");
+            }
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
 
@@ -659,27 +665,27 @@ namespace ytail {
             SDL_GPUShader* fs = loadShader(device, "CustomColor.frag", 0, 1, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load Outline shaders");
-                return;
+            }
+            else{
+                // No depth (overdraws on top), and draw only where stencil != reference (1) so the
+                // shell shows just outside the silhouette. write_mask 0 leaves the stencil untouched.
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+                auto& ds = builder.info.depth_stencil_state;
+                ds.enable_depth_test = false;
+                ds.enable_depth_write = false;
+                ds.enable_stencil_test = true;
+                ds.compare_mask = 0xFF;
+                ds.write_mask = 0x00;
+                ds.front_stencil_state.compare_op = SDL_GPU_COMPAREOP_NOT_EQUAL;
+                ds.front_stencil_state.pass_op = SDL_GPU_STENCILOP_KEEP;
+                ds.front_stencil_state.fail_op = SDL_GPU_STENCILOP_KEEP;
+                ds.front_stencil_state.depth_fail_op = SDL_GPU_STENCILOP_KEEP;
+                ds.back_stencil_state = ds.front_stencil_state;
+                pipelines[static_cast<size_t>(PipelineType::Outline)] = createPipeline(device, builder, "Outline");
             }
 
-            // No depth (overdraws on top), and draw only where stencil != reference (1) so the
-            // shell shows just outside the silhouette. write_mask 0 leaves the stencil untouched.
-            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
-            auto& ds = builder.info.depth_stencil_state;
-            ds.enable_depth_test = false;
-            ds.enable_depth_write = false;
-            ds.enable_stencil_test = true;
-            ds.compare_mask = 0xFF;
-            ds.write_mask = 0x00;
-            ds.front_stencil_state.compare_op = SDL_GPU_COMPAREOP_NOT_EQUAL;
-            ds.front_stencil_state.pass_op = SDL_GPU_STENCILOP_KEEP;
-            ds.front_stencil_state.fail_op = SDL_GPU_STENCILOP_KEEP;
-            ds.front_stencil_state.depth_fail_op = SDL_GPU_STENCILOP_KEEP;
-            ds.back_stencil_state = ds.front_stencil_state;
-            pipelines[static_cast<size_t>(PipelineType::Outline)] = createPipeline(device, builder, "Outline");
-
-            SDL_ReleaseGPUShader(device, vs);
-            SDL_ReleaseGPUShader(device, fs);
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
 
@@ -693,20 +699,20 @@ namespace ytail {
             SDL_GPUShader* fs = loadShader(device, "SolidColor.frag", 0, 0, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load DebugLine shaders");
-                return;
+            }
+            else{
+                // Translucent line list, depth-tested against the scene but not writing depth.
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Line, depthStencilFormat);
+                builder.info.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
+                builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+                builder.info.depth_stencil_state.enable_depth_write = false;
+                builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+                builder.enableAlphaBlend();
+                pipelines[static_cast<size_t>(PipelineType::DebugLine)] = createPipeline(device, builder, "DebugLine");
             }
 
-            // Translucent line list, depth-tested against the scene but not writing depth.
-            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Line, depthStencilFormat);
-            builder.info.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
-            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-            builder.info.depth_stencil_state.enable_depth_write = false;
-            builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
-            builder.enableAlphaBlend();
-            pipelines[static_cast<size_t>(PipelineType::DebugLine)] = createPipeline(device, builder, "DebugLine");
-
-            SDL_ReleaseGPUShader(device, vs);
-            SDL_ReleaseGPUShader(device, fs);
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
         // Editor grid: same line layout as DebugLine, but the fragment shader fades each line
@@ -717,20 +723,20 @@ namespace ytail {
             SDL_GPUShader* fs = loadShader(device, "GridLine.frag", 0, 1, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load Grid shaders");
-                return;
+            }
+            else{
+                // Same state as DebugLine; the fragment shader handles the per-pixel fade.
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Line, depthStencilFormat);
+                builder.info.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
+                builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+                builder.info.depth_stencil_state.enable_depth_write = false;
+                builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+                builder.enableAlphaBlend();
+                pipelines[static_cast<size_t>(PipelineType::Grid)] = createPipeline(device, builder, "Grid");
             }
 
-            // Same state as DebugLine; the fragment shader handles the per-pixel fade.
-            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Line, depthStencilFormat);
-            builder.info.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
-            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-            builder.info.depth_stencil_state.enable_depth_write = false;
-            builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
-            builder.enableAlphaBlend();
-            pipelines[static_cast<size_t>(PipelineType::Grid)] = createPipeline(device, builder, "Grid");
-
-            SDL_ReleaseGPUShader(device, vs);
-            SDL_ReleaseGPUShader(device, fs);
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
         // Camera-facing editor sprites (light / camera icons). Reuses BlinnPhongLit.vert (the model
@@ -743,19 +749,19 @@ namespace ytail {
             SDL_GPUShader* fs = loadShader(device, "Billboard.frag", 1, 0, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load Billboard shaders");
-                return;
+            }
+            else{
+                // Alpha-blended sprite, depth-tested but not writing depth, no culling (either winding).
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+                builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+                builder.info.depth_stencil_state.enable_depth_write = false;
+                builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+                builder.enableAlphaBlend();
+                pipelines[static_cast<size_t>(PipelineType::Billboard)] = createPipeline(device, builder, "Billboard");
             }
 
-            // Alpha-blended sprite, depth-tested but not writing depth, no culling (either winding).
-            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
-            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-            builder.info.depth_stencil_state.enable_depth_write = false;
-            builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
-            builder.enableAlphaBlend();
-            pipelines[static_cast<size_t>(PipelineType::Billboard)] = createPipeline(device, builder, "Billboard");
-
-            SDL_ReleaseGPUShader(device, vs);
-            SDL_ReleaseGPUShader(device, fs);
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
         // Shadow pass: scene depth from the sun's POV into a depth-only target. Reuses the Mesh
@@ -767,17 +773,17 @@ namespace ytail {
             SDL_GPUShader* fs = loadShader(device, "Empty.frag", 0, 0, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load ShadowDepth shaders");
-                return;
+            }
+            else{
+                // Front-face cull writes casters' back faces, keeping self-shadow acne off the lit side.
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+                builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_FRONT;
+                builder.depthOnly(shadowMapFormat);
+                pipelines[static_cast<size_t>(PipelineType::ShadowDepth)] = createPipeline(device, builder, "ShadowDepth");
             }
 
-            // Front-face cull writes casters' back faces, keeping self-shadow acne off the lit side.
-            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
-            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_FRONT;
-            builder.depthOnly(shadowMapFormat);
-            pipelines[static_cast<size_t>(PipelineType::ShadowDepth)] = createPipeline(device, builder, "ShadowDepth");
-
-            SDL_ReleaseGPUShader(device, vs);
-            SDL_ReleaseGPUShader(device, fs);
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
         // Omnidirectional point-light shadows. Same depth-only, front-face-cull state as
@@ -790,20 +796,20 @@ namespace ytail {
             SDL_GPUShader* fs = loadShader(device, "PointShadowDepth.frag", 0, 1, 0, 0);
             if (vs == nullptr || fs == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load PointShadowDepth shaders");
-                return;
+            }
+            else{
+                // Render back faces to keep self-shadow acne off the lit side (same trick as the sun
+                // map's FRONT cull). The proj Y-flip in PointShadowRenderer reverses winding, so BACK
+                // here is what FRONT is for the sun.
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+                builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
+                builder.depthOnly(shadowMapFormat);
+                pipelines[static_cast<size_t>(PipelineType::PointShadowDepth)] =
+                    createPipeline(device, builder, "PointShadowDepth");
             }
 
-            // Render back faces to keep self-shadow acne off the lit side (same trick as the sun
-            // map's FRONT cull). The proj Y-flip in PointShadowRenderer reverses winding, so BACK
-            // here is what FRONT is for the sun.
-            PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
-            builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
-            builder.depthOnly(shadowMapFormat);
-            pipelines[static_cast<size_t>(PipelineType::PointShadowDepth)] =
-                createPipeline(device, builder, "PointShadowDepth");
-
-            SDL_ReleaseGPUShader(device, vs);
-            SDL_ReleaseGPUShader(device, fs);
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
         }
     }
 

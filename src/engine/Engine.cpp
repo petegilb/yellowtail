@@ -49,7 +49,7 @@ namespace ytail {
         // Wait for any in-flight frames to finish before we tear down GPU-backed
         // resources (ImGui backend owns pipelines, buffers, fonts).
         if (device) SDL_WaitForGPUIdle(device);
-        shutdownImGui();
+        if (ImGui::GetCurrentContext()) shutdownImGui();
 
         // Release everything that owns GPU resources BEFORE destroying the device.
         entities.clear(); // RenderComponents drop their shared_ptr<Mesh>/Material
@@ -65,7 +65,7 @@ namespace ytail {
 
         GameplayStatics::engine = nullptr;
 
-        SDL_ShaderCross_Quit();
+        if (shaderCrossInitialized) SDL_ShaderCross_Quit();
         if (device && window) SDL_ReleaseWindowFromGPUDevice(device, window);
         if (device) SDL_DestroyGPUDevice(device);
         if (window) SDL_DestroyWindow(window);
@@ -105,7 +105,8 @@ namespace ytail {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                 "SDR_LINEAR swapchain unsupported; output will not be gamma-correct");
         }
-        if (!SDL_ShaderCross_Init()) {
+        shaderCrossInitialized = SDL_ShaderCross_Init();
+        if (!shaderCrossInitialized) {
             SDL_Log("ShaderCross_Init failed");
             return -1;
         }
@@ -310,7 +311,7 @@ namespace ytail {
             if (light->type != LightType::Directional || !light->castsShadows) continue;
 
             // -Z rotated into world space (same as the lit path).
-            const glm::vec3 dir = glm::normalize(transform->rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+            const glm::vec3 dir = glm::normalize(transform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
             // Sit the light back along -dir from the focus and look toward it.
             const glm::vec3 eye = shadowFocus - dir * shadowDistance;
             // Avoid a degenerate up vector when the sun points nearly straight down.
@@ -488,10 +489,11 @@ namespace ytail {
             if (light == nullptr || transform == nullptr) continue;
 
             const glm::vec4 color(light->color, 1.0f);
-            const glm::vec3 pos = transform->position;
+            // World-space so gizmos sit where the light actually lights (matters when parented).
+            const glm::vec3 pos = glm::vec3(transform->worldMatrix()[3]);
 
             if (light->type == LightType::Directional) {
-                const glm::vec3 dir = glm::normalize(transform->rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+                const glm::vec3 dir = glm::normalize(transform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
                 debug.arrow(pos, pos + dir * 1.5f, color);
             } else if (id == selectedEntity && light->attenuation > 0.0f) {
                 debug.wireSphere(pos, light->attenuation, color);
@@ -568,7 +570,7 @@ namespace ytail {
         // Editor grid: rebuild + stage its world-space lines (same before-pass copy rule).
         if (showGrid && gridLineRenderer) {
             std::vector<JoltDebugVertex> gridLines;
-            buildGridLines(gridLines, gridSpacing, gridExtent, camXform->position);
+            buildGridLines(gridLines, gridSpacing, gridExtent, camXform->getPosition());
             gridLineRenderer->upload(commandBuffer, gridLines);
         }
 
@@ -659,7 +661,7 @@ namespace ytail {
         // Pushed once to fragment slot 0 (FrameLighting @ b0 space3). This state persists for
         // every draw in this command buffer, so all lit materials read the same light set.
         FrameLightingUniform frameLighting{};
-        frameLighting.viewPos = camXform->position;
+        frameLighting.viewPos = camXform->getPosition();
         frameLighting.ambient = ambientLight;
         int lightCount = 0;
         for (const auto& [lightIdx, lightEntity] : entities) {
@@ -673,7 +675,7 @@ namespace ytail {
             // World-space so lighting + shadows agree with parented lights (see PointShadowRenderer).
             gpuLight.position    = glm::vec3(lightXform->worldMatrix()[3]);
             // Forward (-Z) rotated into world space: the direction a directional light travels.
-            gpuLight.direction   = glm::normalize(lightXform->rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+            gpuLight.direction   = glm::normalize(lightXform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
             gpuLight.color       = lightComp->color * lightComp->intensity;
             gpuLight.attenuation = lightComp->attenuation;
             gpuLight.type        = static_cast<int>(lightComp->type);
@@ -828,8 +830,8 @@ namespace ytail {
         // Editor grid, under the scene geometry (drawn first, depth-tested). The fragment shader
         // fades each line radially around the camera using this uniform.
         if (showGrid && gridLineRenderer) {
-            const float snappedX = std::floor(camXform->position.x / gridSpacing) * gridSpacing;
-            const float snappedZ = std::floor(camXform->position.z / gridSpacing) * gridSpacing;
+            const float snappedX = std::floor(camXform->getPosition().x / gridSpacing) * gridSpacing;
+            const float snappedZ = std::floor(camXform->getPosition().z / gridSpacing) * gridSpacing;
             GridFadeUniform gridFade{
                 { snappedX, snappedZ },
                 static_cast<float>(gridExtent) * gridSpacing,
@@ -870,7 +872,8 @@ namespace ytail {
                     icon = cameraIcon;
                 }
                 if (icon == nullptr) continue;
-                icons.push_back({ transform->position, kEditorIconSize, icon, sampler });
+                // World-space so parented lights/cameras get their icon where they actually are.
+                icons.push_back({ glm::vec3(transform->worldMatrix()[3]), kEditorIconSize, icon, sampler });
             }
             billboardRenderer->draw(renderPass, commandBuffer,
                 resourceManager->getPipeline(PipelineType::Billboard), view, projection, icons);
@@ -1034,7 +1037,7 @@ namespace ytail {
         const glm::vec3 nearPoint = glm::vec3(nearH) / nearH.w;
         const glm::vec3 farPoint  = glm::vec3(farH)  / farH.w;
 
-        outOrigin = activeCamera->getComponent<TransformComponent>()->position;
+        outOrigin = activeCamera->getComponent<TransformComponent>()->getPosition();
         outDir = glm::normalize(farPoint - nearPoint);
         return true;
     }

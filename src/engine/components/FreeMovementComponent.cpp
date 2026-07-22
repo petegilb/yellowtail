@@ -39,7 +39,7 @@ namespace ytail
         // yaw is asin-limited to [-90,90] and folds larger yaws into pitch/roll (which snaps the
         // view on scene reload once you've turned past 90 degrees).
         if (!seeded){
-            const glm::vec3 fwd = glm::normalize(transformComp->rotation * constant::WorldForward);
+            const glm::vec3 fwd = glm::normalize(transformComp->getRotation() * constant::WorldForward);
             pitch = glm::degrees(std::asin(std::clamp(fwd.y, -1.0f, 1.0f)));
             yaw   = glm::degrees(std::atan2(-fwd.x, -fwd.z));
             seeded = true;
@@ -62,7 +62,7 @@ namespace ytail
         const bool* keys = SDL_GetKeyboardState(nullptr);
 
         // Basis from the current orientation: forward is -Z, right is +X, up is world +Y
-        const glm::quat& rot = transformComp->rotation;
+        const glm::quat& rot = transformComp->getRotation();
         const glm::vec3 forward = rot * constant::WorldForward;
         const glm::vec3 right = rot * constant::WorldRight;
 
@@ -77,7 +77,7 @@ namespace ytail
         // Normalize so diagonals aren't faster and skip if no keys are down
         if (glm::dot(direction, direction) > 0.f){
             float speed = moveSpeed;
-            transformComp->position += glm::normalize(direction) * speed * deltaTime;
+            transformComp->translate(glm::normalize(direction) * speed * deltaTime);
         }
     }
 
@@ -106,9 +106,9 @@ namespace ytail
                     pitch = std::clamp(pitch, -89.f, 89.f);
 
                     // Yaw about world up, then pitch about local right. Order avoids roll.
-                    transformComp->rotation =
+                    transformComp->setRotation(
                           glm::angleAxis(glm::radians(yaw),   constant::WorldUp)
-                        * glm::angleAxis(glm::radians(pitch), constant::WorldRight);
+                        * glm::angleAxis(glm::radians(pitch), constant::WorldRight));
                 }
                 break;
             default: ;

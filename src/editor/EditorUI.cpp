@@ -125,8 +125,10 @@ namespace ytail
                                    && id != editor->getEditorCameraId();
             if (!hasLight && !hasCamera) continue;
 
-            const glm::vec3 boxMin = transform->position - glm::vec3(kEditorIconSize);
-            const glm::vec3 boxMax = transform->position + glm::vec3(kEditorIconSize);
+            // World-space position, matching where the billboard icon is drawn (parented entities).
+            const glm::vec3 iconPos = glm::vec3(transform->worldMatrix()[3]);
+            const glm::vec3 boxMin = iconPos - glm::vec3(kEditorIconSize);
+            const glm::vec3 boxMax = iconPos + glm::vec3(kEditorIconSize);
             float t;
             if (rayAabb(origin, dir, boxMin, boxMax, t) && t < bestT) {
                 bestT = t;
@@ -429,8 +431,8 @@ namespace ytail
         if (editingCollider) {
             // Jolt places the body unscaled at the transform's position+rotation, so the collider
             // offset lives in that frame (entity scale is deliberately left out).
-            const glm::mat4 bodyMatrix = glm::translate(glm::mat4(1.0f), transform->position)
-                                       * glm::mat4_cast(transform->rotation);
+            const glm::mat4 bodyMatrix = glm::translate(glm::mat4(1.0f), transform->getPosition())
+                                       * glm::mat4_cast(transform->getRotation());
             const physics::ColliderDef& c = rigidbody->colliders[selectedCollider];
             glm::mat4 model = bodyMatrix
                             * glm::translate(glm::mat4(1.0f), c.offset)
@@ -486,9 +488,9 @@ namespace ytail
         glm::quat rotation;
         glm::vec4 perspective;
         if (glm::decompose(local, scale, rotation, translation, skew, perspective)) {
-            transform->position = translation;
-            transform->rotation = rotation;
-            transform->scale = scale;
+            transform->setPosition(translation);
+            transform->setRotation(rotation);
+            transform->setScale(scale);
         }
     }
 

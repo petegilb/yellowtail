@@ -49,7 +49,7 @@ namespace ytail
         const auto camTransform = camera->addComponent<TransformComponent>();
         camera->addComponent<CameraComponent>();
         camera->addComponent<FreeMovementComponent>();
-        camTransform->position = glm::vec3(0.0f, 3.0f, 5.0f);   // back up, looking down -Z toward origin
+        camTransform->setPosition(glm::vec3(0.0f, 3.0f, 5.0f)); // back up, looking down -Z toward origin
         camTransform->setRotationEuler(glm::vec3(-30.0f, 0.0f, 0.0f));
 
         editorCameraId = camera->getId();
@@ -61,8 +61,8 @@ namespace ytail
         if (!camera) return false;
         auto* transform = camera->getComponent<TransformComponent>();
         if (!transform) return false;
-        outPosition = transform->position;
-        outRotation = transform->rotation;
+        outPosition = transform->getPosition();
+        outRotation = transform->getRotation();
         return true;
     }
 
@@ -71,8 +71,8 @@ namespace ytail
         if (!camera) return;
         auto* transform = camera->getComponent<TransformComponent>();
         if (!transform) return;
-        transform->position = position;
-        transform->rotation = rotation;
+        transform->setPosition(position);
+        transform->setRotation(rotation);
     }
 
     void Editor::openScene(const std::string& path){

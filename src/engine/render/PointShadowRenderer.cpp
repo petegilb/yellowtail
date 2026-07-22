@@ -5,8 +5,6 @@
 #include "PointShadowRenderer.h"
 
 #include <algorithm>
-#include <bit>
-#include <cstdint>
 #include <vector>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -36,21 +34,11 @@ namespace ytail {
         { 0,-1, 0}, { 0,-1, 0}, { 0, 0, 1}, { 0, 0,-1}, { 0,-1, 0}, { 0,-1, 0}
     };
 
-    // Change-detection hash: any change to a cube's inputs (light pose/radius, or an in-range
-    // caster's mesh/transform) flips the signature and forces that slot to re-render.
-    static void hashBits(size_t& h, uint32_t bits) {
-        h ^= static_cast<size_t>(bits) + kHashMix + (h << 6) + (h >> 2);
-    }
-    static void hashFloat(size_t& h, float f) { hashBits(h, std::bit_cast<uint32_t>(f)); }
-    static void hashVec3(size_t& h, const glm::vec3& v) { hashFloat(h, v.x); hashFloat(h, v.y); hashFloat(h, v.z); }
-    static void hashMat4(size_t& h, const glm::mat4& m) {
-        const float* p = &m[0][0];
-        for (int i = 0; i < 16; ++i) hashFloat(h, p[i]);
-    }
-    static void hashPtr(size_t& h, const void* p) {
-        const auto v = reinterpret_cast<uintptr_t>(p);
-        hashBits(h, static_cast<uint32_t>(v));
-        hashBits(h, static_cast<uint32_t>(v >> 32));
+    // Fold a value into a slot's change signature (boost::hash_combine style). A slot re-renders
+    // when its signature changes: light version + radius, and each in-range caster's id, world
+    // version, and mesh.
+    static void hashCombine(size_t& h, Uint64 v) {
+        h ^= static_cast<size_t>(v) + kHashMix + (h << 6) + (h >> 2);
     }
 
     PointShadowRenderer::PointShadowRenderer(SDL_GPUDevice* inDevice, ResourceManager* inResources)
@@ -106,8 +94,38 @@ namespace ytail {
         if (static_cast<int>(slots.size()) != maxShadowedPoints) slots.assign(maxShadowedPoints, SlotState{});
         if (cubeRecreated) { for (SlotState& s : slots) s.valid = false; cubeRecreated = false; }
 
+        struct CasterInfo { const Mesh* mesh; glm::mat4 model; glm::vec3 center; float radius; Uint32 id; Uint64 version; };
+        // A shadow-casting point light, its in-range casters, and a signature of everything the
+        // cube depends on (candidates with no visible caster are dropped before slot assignment).
+        struct Candidate {
+            Uint32 id;
+            glm::vec3 lightPos;
+            float farPlane;
+            Uint64 lightVersion;
+            std::vector<const CasterInfo*> visible;
+            size_t signature = 0;
+            int slotIndex = -1;
+        };
+
+        // Shadow-casting point lights first (cheap component checks), so a scene without any skips
+        // the per-caster gathering below entirely.
+        std::vector<Candidate> candidates;
+        for (const auto& [id, entity] : entities) {
+            if (entity == nullptr) continue;
+            const auto* light = entity->getComponent<LightComponent>();
+            const auto* xform = entity->getComponent<TransformComponent>();
+            if (light == nullptr || xform == nullptr) continue;
+            if (light->type != LightType::Point || !light->castsShadows) continue;
+
+            const float farPlane = light->attenuation;
+            if (farPlane <= kFaceNearPlane) continue; // degenerate radius; light stays unshadowed
+
+            candidates.push_back({ id, glm::vec3(xform->worldMatrix()[3]), farPlane,
+                                   xform->getWorldVersion() });
+        }
+        if (candidates.empty()) return; // stale slot owners get reconciled next time a light exists
+
         // World transform + bounding sphere for every shadow caster, computed once for the frame.
-        struct CasterInfo { const Mesh* mesh; glm::mat4 model; glm::vec3 center; float radius; };
         std::vector<CasterInfo> allCasters;
         for (const auto& [castId, caster] : entities) {
             if (caster == nullptr) continue;
@@ -125,48 +143,37 @@ namespace ytail {
             const float maxScale = glm::max(glm::length(glm::vec3(model[0])),
                                    glm::max(glm::length(glm::vec3(model[1])),
                                             glm::length(glm::vec3(model[2]))));
-            allCasters.push_back({ mesh.get(), model, center, localRadius * maxScale });
+            allCasters.push_back({ mesh.get(), model, center, localRadius * maxScale,
+                                   castId, casterXform->getWorldVersion() });
         }
 
-        // A shadow-casting point light with >= 1 in-range caster this frame, plus its cull result
-        // and a signature of everything the cube depends on.
-        struct Candidate {
-            Uint32 id;
-            glm::vec3 lightPos;
-            float farPlane;
-            std::vector<const CasterInfo*> visible;
-            size_t signature;
-            int slotIndex = -1;
-        };
-        std::vector<Candidate> candidates;
-        for (const auto& [id, entity] : entities) {
-            if (entity == nullptr) continue;
-            const auto* light = entity->getComponent<LightComponent>();
-            const auto* xform = entity->getComponent<TransformComponent>();
-            if (light == nullptr || xform == nullptr) continue;
-            if (light->type != LightType::Point || !light->castsShadows) continue;
-
-            const glm::vec3 lightPos = glm::vec3(xform->worldMatrix()[3]);
-            const float     farPlane = light->attenuation;
-            if (farPlane <= kFaceNearPlane) continue; // degenerate radius; light stays unshadowed
-
-            Candidate cand{ id, lightPos, farPlane, {}, 0 };
+        // Cull casters per light and build each candidate's signature. Caster contributions are
+        // summed (commutative), so an entity-map rehash that reorders iteration doesn't change the
+        // signature and spuriously re-render every slot.
+        for (Candidate& cand : candidates) {
             size_t sig = kFnvOffsetBasis;
-            hashVec3(sig, lightPos);
-            hashFloat(sig, farPlane);
+            hashCombine(sig, cand.lightVersion);  // light moved
+            Uint32 farBits; SDL_memcpy(&farBits, &cand.farPlane, sizeof(farBits));
+            hashCombine(sig, farBits);            // light radius changed
+            size_t casterSum = 0;
             for (const CasterInfo& casterInfo : allCasters) {
-                if (glm::length(casterInfo.center - lightPos) > farPlane + casterInfo.radius) {
+                if (glm::length(casterInfo.center - cand.lightPos) > cand.farPlane + casterInfo.radius) {
                     ++lastCulled;
                     continue;
                 }
                 cand.visible.push_back(&casterInfo);
-                hashPtr(sig, casterInfo.mesh);
-                hashMat4(sig, casterInfo.model);
+                size_t casterHash = kFnvOffsetBasis;
+                hashCombine(casterHash, casterInfo.id);
+                hashCombine(casterHash, casterInfo.version);
+                hashCombine(casterHash, casterInfo.mesh->uid); // stable id; a pointer could be recycled
+                casterSum += casterHash;
             }
-            if (cand.visible.empty()) continue; // no occluders in range: no shadow, no slot
+            hashCombine(sig, casterSum);
             cand.signature = sig;
-            candidates.push_back(std::move(cand));
         }
+        // No occluders in range: no shadow, no slot.
+        std::erase_if(candidates, [](const Candidate& c) { return c.visible.empty(); });
+        if (candidates.empty()) return;
 
         // --- Slot reconciliation (persistent ownership so caches survive across frames) ---
         auto isCandidate = [&](Uint32 owner) {
@@ -206,7 +213,7 @@ namespace ytail {
         const int budget = std::clamp(refreshBudgetPerFrame, 1, static_cast<int>(slots.size()));
         int remaining = std::max(0, budget - static_cast<int>(renderNow.size()));
         if (!changed.empty() && remaining > 0) {
-            const int start = changed.empty() ? 0 : refreshCursor % static_cast<int>(changed.size());
+            const int start = refreshCursor % static_cast<int>(changed.size());
             for (int n = 0; n < static_cast<int>(changed.size()) && remaining > 0; ++n, --remaining) {
                 renderNow.push_back(changed[(start + n) % static_cast<int>(changed.size())]);
             }

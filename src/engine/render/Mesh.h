@@ -49,6 +49,9 @@ namespace ytail {
         std::string name = "undefined";
         // The file this mesh came from (e.g. "models/cube.glb"), used when saving.
         std::string sourcePath;
+        // Process-unique identity for change detection. Never reused, unlike the Mesh's address
+        // (a freed mesh's allocation can be recycled, which would fool pointer-keyed caches).
+        const Uint64 uid = ++uidCounter;
         SDL_GPUBuffer* vertexBuffer = nullptr;
         SDL_GPUBuffer* indexBuffer  = nullptr;
         // different pieces of the main mesh so we can have multiple materials per mesh
@@ -59,6 +62,7 @@ namespace ytail {
         glm::vec3 aabbMax{0.0f};
     private:
         SDL_GPUDevice* device = nullptr;
+        inline static Uint64 uidCounter = 0;
     };
 } // ytail
 
