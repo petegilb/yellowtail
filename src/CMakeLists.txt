@@ -9,9 +9,10 @@ file(GLOB_RECURSE ENGINE_HEADERS CONFIGURE_DEPENDS
 
 add_library(engine STATIC ${ENGINE_SOURCES} ${ENGINE_HEADERS})
 
-# PUBLIC so the game/editor executables inherit these transitively by linking `engine`.
+# PUBLIC so linking `engine` inherits these. PROJECT_SOURCE_DIR (not CMAKE_SOURCE_DIR) so the
+# paths stay pinned to yellowtail's tree when it's consumed as a submodule of another project.
 target_include_directories(engine PUBLIC
-        "${CMAKE_SOURCE_DIR}/external"
+        "${PROJECT_SOURCE_DIR}/external"
         "${JoltPhysics_SOURCE_DIR}/.."
         "${clay_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}"   # lets game/editor do #include "engine/Engine.h"
@@ -35,6 +36,12 @@ target_compile_definitions(engine PUBLIC
         GLM_FORCE_DEPTH_ZERO_TO_ONE
         GLM_ENABLE_EXPERIMENTAL
 )
+
+# Absolute path to the engine's runtime assets. A game that links `engine` as a submodule
+# needs the shaders beside its executable; yt_copy_engine_assets below handles that, and this
+# variable is here for anything else a consumer wants to copy (icons, etc). Cached so it stays
+# visible after add_subdirectory returns to the consumer's CMakeLists.
+set(YELLOWTAIL_ASSETS_DIR "${PROJECT_SOURCE_DIR}/assets" CACHE INTERNAL "yellowtail engine runtime assets")
 
 # --- Per-app finalize: output dir, debugger working dir, and the asset/DLL copy steps ---
 # Applied to every executable so each one is independently runnable from its own directory.
@@ -67,23 +74,39 @@ function(yt_configure_app target)
     endif()
 endfunction()
 
-# --- Game executable ---
-file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/game/*.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/game/*.c)
-file(GLOB_RECURSE GAME_HEADERS CONFIGURE_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/game/*.h)
-add_executable(ytail_game ${GAME_SOURCES} ${GAME_HEADERS})
-target_link_libraries(ytail_game PRIVATE engine)
-yt_configure_app(ytail_game)
+# Copy the engine's shaders next to a consumer's executable. A game that links `engine`
+# calls this alongside shipping its own assets, so the required shaders end up beside the exe.
+# Merges into the target's assets/ dir.
+function(yt_copy_engine_assets target)
+    add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${YELLOWTAIL_ASSETS_DIR}/shaders"
+                    "$<TARGET_FILE_DIR:${target}>/assets/shaders"
+            COMMENT "Copying engine shaders next to ${target}")
+endfunction()
 
-# --- Editor executable ---
-file(GLOB_RECURSE EDITOR_SOURCES CONFIGURE_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.c)
-file(GLOB_RECURSE EDITOR_HEADERS CONFIGURE_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.h)
-add_executable(ytail_editor ${EDITOR_SOURCES} ${EDITOR_HEADERS}
-        ${CMAKE_SOURCE_DIR}/external/imguizmo/ImGuizmo.cpp)
-target_link_libraries(ytail_editor PRIVATE engine)
-yt_configure_app(ytail_editor)
+# The sample game and the editor only build when yellowtail is the project being built.
+# Consumed as a submodule these are skipped: a game only wants the `engine` library, not
+# yellowtail's own executables (and their asset/DLL copy steps) in its build.
+if(PROJECT_IS_TOP_LEVEL)
+    # --- Game executable (sample) ---
+    file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/game/*.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/game/*.c)
+    file(GLOB_RECURSE GAME_HEADERS CONFIGURE_DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/game/*.h)
+    add_executable(ytail_game ${GAME_SOURCES} ${GAME_HEADERS})
+    target_link_libraries(ytail_game PRIVATE engine)
+    yt_configure_app(ytail_game)
+
+    # --- Editor executable ---
+    file(GLOB_RECURSE EDITOR_SOURCES CONFIGURE_DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.c)
+    file(GLOB_RECURSE EDITOR_HEADERS CONFIGURE_DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.h)
+    add_executable(ytail_editor ${EDITOR_SOURCES} ${EDITOR_HEADERS}
+            ${PROJECT_SOURCE_DIR}/external/imguizmo/ImGuizmo.cpp)
+    target_link_libraries(ytail_editor PRIVATE engine)
+    yt_configure_app(ytail_editor)
+endif()
