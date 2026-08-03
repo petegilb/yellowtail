@@ -1,0 +1,470 @@
+{
+  "ambientColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "ambientIntensity": 0.20000000298023224,
+  "entities": [
+    {
+      "components": [
+        {
+          "position": [
+            0.0,
+            5.0,
+            -1.4901161193847656e-08
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "type": "transform"
+        },
+        {
+          "bodyType": "Dynamic",
+          "colliders": [
+            {
+              "halfExtents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "halfHeight": 0.5,
+              "offset": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "radius": 1.0,
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "shape": "Sphere"
+            }
+          ],
+          "type": "rigidbody"
+        },
+        {
+          "castsShadow": true,
+          "materials": [
+            "materials/sphere.mat"
+          ],
+          "mesh": "models/sphere.glb",
+          "type": "render"
+        }
+      ],
+      "id": 5,
+      "name": "Sphere"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            0.0,
+            1.3501213788986206,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "type": "transform"
+        },
+        {
+          "bodyType": "Static",
+          "colliders": [
+            {
+              "halfExtents": [
+                10.0,
+                0.30000001192092896,
+                10.0
+              ],
+              "halfHeight": 0.5,
+              "offset": [
+                0.0,
+                -0.2941601276397705,
+                0.0
+              ],
+              "radius": 0.5,
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "shape": "Box"
+            }
+          ],
+          "type": "rigidbody"
+        },
+        {
+          "castsShadow": false,
+          "materials": [
+            "materials/floor.mat"
+          ],
+          "mesh": "models/floor.glb",
+          "type": "render"
+        }
+      ],
+      "id": 4,
+      "name": "Floor"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            2.949519157409668,
+            2.3886988162994385,
+            -7.25921106338501
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "type": "transform"
+        },
+        {
+          "castsShadow": true,
+          "materials": [
+            "materials/crate.mat"
+          ],
+          "mesh": "models/cube.glb",
+          "type": "render"
+        }
+      ],
+      "id": 3,
+      "name": "Cube2"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            0.4703397750854492,
+            2.0008394718170166,
+            -0.0018019676208496094
+          ],
+          "rotation": [
+            0.0,
+            0.47169795632362366,
+            0.0,
+            0.8817601799964905
+          ],
+          "scale": [
+            0.9999998807907104,
+            1.0,
+            0.9999998807907104
+          ],
+          "type": "transform"
+        },
+        {
+          "castsShadow": true,
+          "materials": [
+            "materials/crate.mat"
+          ],
+          "mesh": "models/cube.glb",
+          "type": "render"
+        }
+      ],
+      "id": 2,
+      "name": "Cube77",
+      "parent": 9
+    },
+    {
+      "components": [
+        {
+          "position": [
+            3.6570181846618652,
+            2.3886988162994385,
+            6.323929309844971
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "type": "transform"
+        },
+        {
+          "castsShadow": true,
+          "materials": [
+            "materials/crate.mat"
+          ],
+          "mesh": "models/cube.glb",
+          "type": "render"
+        }
+      ],
+      "id": 9,
+      "name": "Cube3"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            -2.60675048828125,
+            10.100597381591797,
+            2.308870792388916
+          ],
+          "rotation": [
+            -0.386865496635437,
+            0.1238631010055542,
+            0.03361600264906883,
+            0.9131609797477722
+          ],
+          "scale": [
+            0.999993622303009,
+            0.9999939799308777,
+            0.9999949932098389
+          ],
+          "type": "transform"
+        },
+        {
+          "attenuation": 36.0,
+          "castsShadows": true,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 1.0,
+          "lightType": 0,
+          "type": "light"
+        }
+      ],
+      "id": 1,
+      "name": "Light1"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            -4.873102188110352,
+            14.36430835723877,
+            3.037101984024048
+          ],
+          "rotation": [
+            -0.20186717808246613,
+            -0.2311588078737259,
+            -0.2743065655231476,
+            0.9113567471504211
+          ],
+          "scale": [
+            0.9999975562095642,
+            0.9999969601631165,
+            0.9999954700469971
+          ],
+          "type": "transform"
+        },
+        {
+          "bodyType": "Dynamic",
+          "colliders": [
+            {
+              "halfExtents": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "halfHeight": 0.5,
+              "offset": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "radius": 0.5,
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "shape": "Box"
+            }
+          ],
+          "type": "rigidbody"
+        },
+        {
+          "castsShadow": true,
+          "materials": [
+            "materials/crate.mat"
+          ],
+          "mesh": "models/cube.glb",
+          "type": "render"
+        }
+      ],
+      "id": 7,
+      "name": "Cube1"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            7.63388729095459,
+            10.100597381591797,
+            8.542189598083496
+          ],
+          "rotation": [
+            -0.3890090882778168,
+            0.11695738136768341,
+            0.049864716827869415,
+            0.9124178886413574
+          ],
+          "scale": [
+            0.9999935030937195,
+            0.9999938011169434,
+            0.9999950528144836
+          ],
+          "type": "transform"
+        },
+        {
+          "attenuation": 36.0,
+          "castsShadows": true,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 1.0,
+          "lightType": 0,
+          "type": "light"
+        }
+      ],
+      "id": 11,
+      "name": "Light2"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            6.664635181427002,
+            4.480242729187012,
+            -3.3007683753967285
+          ],
+          "rotation": [
+            -0.386865496635437,
+            0.1238631010055542,
+            0.03361600264906883,
+            0.9131609797477722
+          ],
+          "scale": [
+            0.999993622303009,
+            0.9999939799308777,
+            0.9999949932098389
+          ],
+          "type": "transform"
+        },
+        {
+          "attenuation": 8.899999618530273,
+          "castsShadows": true,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 1.0,
+          "lightType": 0,
+          "type": "light"
+        }
+      ],
+      "id": 12,
+      "name": "Light3"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            2.384185791015625e-07,
+            2.003878116607666,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            -0.3378446698188782,
+            0.0,
+            0.9412018656730652
+          ],
+          "scale": [
+            0.9999998211860657,
+            1.0,
+            0.9999998211860657
+          ],
+          "type": "transform"
+        },
+        {
+          "castsShadow": true,
+          "materials": [
+            "materials/crate.mat"
+          ],
+          "mesh": "models/cube.glb",
+          "type": "render"
+        }
+      ],
+      "id": 14,
+      "name": "Cube4",
+      "parent": 2
+    },
+    {
+      "components": [
+        {
+          "position": [
+            0.22282814979553223,
+            1.283677577972412,
+            -0.4781322479248047
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.25000613927841187,
+            0.24999889731407166,
+            0.2500048577785492
+          ],
+          "type": "transform"
+        },
+        {
+          "castsShadow": true,
+          "materials": [
+            "materials/crate.mat"
+          ],
+          "mesh": "models/cube.glb",
+          "type": "render"
+        }
+      ],
+      "id": 15,
+      "name": "Cube",
+      "parent": 14
+    }
+  ],
+  "version": 1
+}
