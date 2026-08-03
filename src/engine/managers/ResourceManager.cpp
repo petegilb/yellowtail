@@ -65,17 +65,17 @@ namespace ytail {
 
         // Named local (compound literals are C99, not C++), fields in declaration order.
         const SDL_GPUTextureCreateInfo texInfo = {
-            .type                 = SDL_GPU_TEXTURETYPE_2D,
-            .format               = format,
-            .usage                = SDL_GPU_TEXTUREUSAGE_SAMPLER,
-            .width                = static_cast<Uint32>(imageData->w),
-            .height               = static_cast<Uint32>(imageData->h),
+            .type = SDL_GPU_TEXTURETYPE_2D,
+            .format = format,
+            .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
+            .width = static_cast<Uint32>(imageData->w),
+            .height = static_cast<Uint32>(imageData->h),
             .layer_count_or_depth = 1,
-            .num_levels           = 1,
-            .props                = props,
+            .num_levels = 1,
+            .props = props,
         };
         SDL_GPUTexture* gpuTexture = SDL_CreateGPUTexture(device, &texInfo);
-        SDL_DestroyProperties(props);   // texture copied what it needs; free the props object
+        SDL_DestroyProperties(props); // texture copied what it needs; free the props object
 
         // upload the pixels into the GPUTexture that we made
 
@@ -88,7 +88,7 @@ namespace ytail {
             return nullptr;
         }
 
-        const Uint32 imageWidth  = static_cast<Uint32>(converted->w);
+        const Uint32 imageWidth = static_cast<Uint32>(converted->w);
         const Uint32 imageHeight = static_cast<Uint32>(converted->h);
         // 4 bytes/pixel (RGBA8)
         const Uint32 byteSize = imageWidth * imageHeight * 4;
@@ -96,7 +96,7 @@ namespace ytail {
         // Stage the pixels in a transfer buffer.
         SDL_GPUTransferBufferCreateInfo tbInfo = {};
         tbInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        tbInfo.size  = byteSize;
+        tbInfo.size = byteSize;
         SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(device, &tbInfo);
 
         void* mapped = SDL_MapGPUTransferBuffer(device, transferBuffer, false);
@@ -140,13 +140,13 @@ namespace ytail {
 
         // Linear UNORM (not sRGB): these stand in for data masks like specular, which sample linear.
         const SDL_GPUTextureCreateInfo texInfo = {
-            .type                 = SDL_GPU_TEXTURETYPE_2D,
-            .format               = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-            .usage                = SDL_GPU_TEXTUREUSAGE_SAMPLER,
-            .width                = 1,
-            .height               = 1,
+            .type = SDL_GPU_TEXTURETYPE_2D,
+            .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
+            .width = 1,
+            .height = 1,
             .layer_count_or_depth = 1,
-            .num_levels           = 1,
+            .num_levels = 1,
         };
         SDL_GPUTexture* gpuTexture = SDL_CreateGPUTexture(device, &texInfo);
 
@@ -154,7 +154,7 @@ namespace ytail {
         const Uint8 pixel[4] = { r, g, b, a };
         SDL_GPUTransferBufferCreateInfo tbInfo = {};
         tbInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        tbInfo.size  = sizeof(pixel);
+        tbInfo.size = sizeof(pixel);
         SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(device, &tbInfo);
 
         void* mapped = SDL_MapGPUTransferBuffer(device, transferBuffer, false);
@@ -287,22 +287,22 @@ namespace ytail {
 
         // create the GPU Buffers based on the sizes of each array
         const auto vertexBytes = static_cast<Uint32>(vertices.size() * sizeof(Vertex));
-        const auto indexBytes  = static_cast<Uint32>(indices.size()  * sizeof(Uint32));
+        const auto indexBytes = static_cast<Uint32>(indices.size()  * sizeof(Uint32));
 
         SDL_GPUBufferCreateInfo vbInfo = {};
         vbInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
-        vbInfo.size  = vertexBytes;
+        vbInfo.size = vertexBytes;
         SDL_GPUBuffer* vertexBuffer = SDL_CreateGPUBuffer(device, &vbInfo);
 
         SDL_GPUBufferCreateInfo ibInfo = {};
         ibInfo.usage = SDL_GPU_BUFFERUSAGE_INDEX;
-        ibInfo.size  = indexBytes;
+        ibInfo.size = indexBytes;
         SDL_GPUBuffer* indexBuffer = SDL_CreateGPUBuffer(device, &ibInfo);
 
         // create the transfer buffer that we can use for both
         SDL_GPUTransferBufferCreateInfo tbInfo = {};
         tbInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        tbInfo.size  = vertexBytes + indexBytes;
+        tbInfo.size = vertexBytes + indexBytes;
         SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(device, &tbInfo);
 
         // copy over the data from our vertices and indices into the transfer buffer (on the CPU side)
@@ -496,8 +496,8 @@ namespace ytail {
 
     // The two vertex formats our pipelines consume.
     enum class VertexLayout {
-        Mesh,  // Vertex: vec3 position, vec3 normal, vec2 uv
-        Line,  // JoltDebugVertex: vec3 position, vec4 color
+        Mesh, // Vertex: vec3 position, vec3 normal, vec2 uv
+        Line, // JoltDebugVertex: vec3 position, vec4 color
     };
 
     // Fills a SDL_GPUGraphicsPipelineCreateInfo with the defaults every pipeline here shares:

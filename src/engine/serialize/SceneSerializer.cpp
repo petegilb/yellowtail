@@ -6,6 +6,7 @@
 
 #include <fstream>
 #include <string>
+#include <unordered_map>
 
 #include <nlohmann/json.hpp>
 
@@ -21,14 +22,17 @@ namespace ytail {
     // Bump this when the scene format changes; components gate new fields on ar.version.
     static constexpr int SCENE_VERSION = 1;
 
-    nlohmann::json saveSceneToJson(const Engine& engine) {
+    nlohmann::json saveSceneToJson(Engine& engine) {
         nlohmann::json root;
         root["version"] = SCENE_VERSION;
         root["ambientColor"] = engine.getAmbientColor();
         root["ambientIntensity"] = engine.getAmbientIntensity();
 
+        World& world = engine.getWorld();
+        const ComponentRegistry& registry = engine.getComponentRegistry();
+
         nlohmann::json entitiesJson = nlohmann::json::array();
-        for (const Entity& entity : engine.getEntityList()) {
+        for (const Entity& entity : world.entities()) {
             if (!entity.isSerializable()) continue;
 
             nlohmann::json entityJson;
@@ -38,8 +42,11 @@ namespace ytail {
                 entityJson["parent"] = entity.getParentId();
             }
 
+            // Components come out in registry order (attach order isn't tracked by the pools).
             nlohmann::json componentsJson = nlohmann::json::array();
-            for (const auto& component : entity.getComponents()) {
+            for (const ComponentTypeInfo& info : registry.getTypes()) {
+                Component* component = info.get(world, entity.getId());
+                if (component == nullptr) continue;
                 nlohmann::json compJson;
                 compJson["type"] = component->serialId();
                 Archive ar{ &compJson, false, SCENE_VERSION, engine.getResourceManager() };
@@ -61,12 +68,27 @@ namespace ytail {
         engine.setAmbientIntensity(root.value("ambientIntensity", 1.0f));
 
         if (!root.contains("entities")) return;
+        const auto& entitiesJson = root.at("entities");
+
+        // Size entity storage and every pool up front from the file, so loading doesn't grow
+        // arrays as it goes.
+        std::unordered_map<std::string, size_t> typeCounts;
+        for (const auto& entityJson : entitiesJson) {
+            if (!entityJson.contains("components")) continue;
+            for (const auto& compJson : entityJson.at("components")) {
+                typeCounts[compJson.at("type").get<std::string>()]++;
+            }
+        }
+        engine.getWorld().reserveEntities(entitiesJson.size());
+        for (const auto& [type, count] : typeCounts) {
+            engine.getComponentRegistry().reserveById(type, engine.getWorld(), count);
+        }
 
         // Parent links are resolved in a second pass so a child can reference a parent that
         // hasn't been created yet when we reach the child.
         std::vector<std::pair<Uint32, Uint32>> pendingParents;
 
-        for (const auto& entityJson : root.at("entities")) {
+        for (const auto& entityJson : entitiesJson) {
             const Uint32 id = entityJson.at("id").get<Uint32>();
             Entity* entity = engine.addEntityWithId(id);
             if (entity == nullptr) continue; // duplicate id in the file; already logged
@@ -79,12 +101,11 @@ namespace ytail {
             if (!entityJson.contains("components")) continue;
             for (const auto& compJson : entityJson.at("components")) {
                 const std::string type = compJson.at("type").get<std::string>();
-                std::unique_ptr<Component> component = engine.getComponentRegistry().create(type);
-                if (!component) continue;
+                Component* attached = engine.getComponentRegistry().emplaceById(type, engine.getWorld(), id);
+                if (attached == nullptr) continue;
 
                 // Archive reads from compJson; on load it only pulls values out, never edits it.
                 Archive ar{ const_cast<nlohmann::json*>(&compJson), true, version, engine.getResourceManager() };
-                Component* attached = entity->addComponent(std::move(component));
                 attached->serialize(ar);
             }
         }
@@ -94,7 +115,7 @@ namespace ytail {
         }
     }
 
-    bool saveScene(const Engine& engine, const std::string& path) {
+    bool saveScene(Engine& engine, const std::string& path) {
         std::ofstream file(engine.getResourceManager()->resolveAssetPath(path));
         if (!file.is_open()) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not write scene file: %s", path.c_str());
@@ -105,7 +126,7 @@ namespace ytail {
     }
 
     static bool entityNameInUse(const Engine& engine, const std::string& name) {
-        for (const Entity& entity : engine.getEntityList()) {
+        for (const Entity& entity : engine.getWorld().entities()) {
             if (entity.getName() == name) return true;
         }
         return false;
@@ -138,10 +159,13 @@ namespace ytail {
         }
     }
 
-    // Clone one entity into the scene (components via a save->load round-trip), reparent it
-    // under parentId (NULL_ENTITY = root), then recurse into the source's children. Works in
-    // ids and snapshots the source up front: addEntity can relocate every entity.
+    // Clone an entity (components via a save->load round-trip) under parentId (NULL_ENTITY =
+    // root), then recurse into its children. Copies what it needs from the source up front
+    // since addEntity can move every entity in memory.
     static EntityId cloneEntityRecursive(Engine& engine, const EntityId srcId, const EntityId parentId) {
+        World& world = engine.getWorld();
+        const ComponentRegistry& registry = engine.getComponentRegistry();
+
         std::string srcName;
         bool srcSerializable = true;
         std::vector<EntityId> srcChildren;
@@ -152,14 +176,16 @@ namespace ytail {
             srcName = src->getName();
             srcSerializable = src->isSerializable();
             srcChildren = src->getChildIds();
-            for (const auto& component : src->getComponents()) {
+            for (const ComponentTypeInfo& info : registry.getTypes()) {
+                Component* component = info.get(world, srcId);
+                if (component == nullptr) continue;
                 nlohmann::json compJson;
                 compJson["type"] = component->serialId();
                 Archive out{ &compJson, false, SCENE_VERSION, engine.getResourceManager() };
                 component->serialize(out);
                 compJsons.push_back(std::move(compJson));
             }
-        } // src goes stale at the addEntity below; everything needed is snapshotted
+        } // src goes stale at the addEntity below; everything needed is copied out above
 
         Entity* copy = engine.addEntity();
         const EntityId copyId = copy->getId();
@@ -167,9 +193,8 @@ namespace ytail {
         copy->setSerializable(srcSerializable);
 
         for (nlohmann::json& compJson : compJsons) {
-            std::unique_ptr<Component> clone = engine.getComponentRegistry().create(compJson.at("type").get<std::string>());
-            if (!clone) continue;
-            Component* attached = copy->addComponent(std::move(clone));
+            Component* attached = registry.emplaceById(compJson.at("type").get<std::string>(), world, copyId);
+            if (attached == nullptr) continue;
             Archive in{ &compJson, true, SCENE_VERSION, engine.getResourceManager() };
             attached->serialize(in);
         }
@@ -177,7 +202,7 @@ namespace ytail {
         if (parentId != NULL_ENTITY) engine.reparent(copyId, parentId);
 
         for (const EntityId childId : srcChildren) {
-            cloneEntityRecursive(engine, childId, copyId); // relocates entities; copy is stale after
+            cloneEntityRecursive(engine, childId, copyId); // moves entities; copy is stale after
         }
         return copyId;
     }

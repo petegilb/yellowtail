@@ -4,7 +4,13 @@
 
 #include "Component.h"
 
+#include "World.h"
+
 namespace ytail {
     Component::Component() {
+    }
+
+    Entity* Component::getOwner() const {
+        return world != nullptr ? world->getEntity(ownerId) : nullptr;
     }
 } // ytail

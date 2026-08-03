@@ -7,8 +7,8 @@
 #include "../Component.h"
 #include "glm/vec3.hpp"
 #include "glm/mat4x4.hpp"
-#include "glm/gtc/quaternion.hpp"        // defines glm::quat (fwd.hpp only declares it)
-#include "glm/gtc/matrix_transform.hpp"  // translate / scale
+#include "glm/gtc/quaternion.hpp" // defines glm::quat (fwd.hpp only declares it)
+#include "glm/gtc/matrix_transform.hpp" // translate / scale
 
 
 namespace ytail {
@@ -67,10 +67,10 @@ public:
         // Lazy world/normal cache. mutable so the const accessors can refresh it.
         mutable glm::mat4 cachedWorld{1.0f};
         mutable glm::mat4 cachedNormal{1.0f};
-        mutable Uint64 cachedLocalVer = 0;       // localVersion the cached world was built from
+        mutable Uint64 cachedLocalVer = 0; // localVersion the cached world was built from
         mutable Uint64 cachedParentWorldVer = 0; // parent worldVersion the cached world was built from
-        mutable const TransformComponent* cachedParentXform = nullptr; // parent identity at last build (reparent detection)
-        mutable Uint64 worldVersion = 0;         // bumps whenever cachedWorld changes
+        mutable EntityId cachedParentId = NULL_ENTITY; // parent identity at last build (reparent detection)
+        mutable Uint64 worldVersion = 0; // bumps whenever cachedWorld changes
         mutable bool normalValid = false;
 
         // Refresh cachedWorld/worldVersion if this transform or its parent moved since last build.

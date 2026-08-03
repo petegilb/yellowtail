@@ -7,7 +7,7 @@
 #include "imgui.h"
 
 #include "TransformComponent.h"
-#include "engine/Entity.h"
+#include "engine/World.h"
 #include "engine/GameplayStatics.h"
 #include "engine/serialize/Archive.h"
 #include "engine/serialize/EnumJson.h"
@@ -24,11 +24,27 @@ namespace ytail {
         if (body != InvalidBody) PhysicsManager::get().removeBody(body);
     }
 
-    bool RigidbodyComponent::ensureBody() {
-        if (transformComp == nullptr && owner != nullptr) {
-            transformComp = owner->getComponent<TransformComponent>();
-        }
-        if (transformComp == nullptr) return false;
+    RigidbodyComponent::RigidbodyComponent(RigidbodyComponent&& other) noexcept
+        : Component(std::move(other)),
+          colliders(std::move(other.colliders)), type(other.type),
+          body(other.body), bodyDirty(other.bodyDirty) {
+        other.body = InvalidBody; // the old copy's destructor must not delete the live body
+    }
+
+    RigidbodyComponent& RigidbodyComponent::operator=(RigidbodyComponent&& other) noexcept {
+        if (this == &other) return *this;
+        if (body != InvalidBody) PhysicsManager::get().removeBody(body);
+        Component::operator=(std::move(other));
+        colliders = std::move(other.colliders);
+        type = other.type;
+        body = other.body;
+        bodyDirty = other.bodyDirty;
+        other.body = InvalidBody;
+        return *this;
+    }
+
+    bool RigidbodyComponent::ensureBody(const TransformComponent* transform) {
+        if (transform == nullptr) return false;
 
         if (bodyDirty && body != InvalidBody) {
             PhysicsManager::get().removeBody(body);
@@ -40,8 +56,8 @@ namespace ytail {
         if (body == InvalidBody) {
             BodyDef def;
             def.colliders = colliders;
-            def.position = transformComp->getPosition();
-            def.rotation = transformComp->getRotation();
+            def.position = transform->getPosition();
+            def.rotation = transform->getRotation();
             def.type = type;
             body = PhysicsManager::get().createBody(def);
         }
@@ -49,7 +65,9 @@ namespace ytail {
     }
 
     void RigidbodyComponent::fixedTick(float deltaTime) {
-        if (!ensureBody()) return;
+        // Looked up each tick: cached component pointers go stale when pools change.
+        TransformComponent* transform = getSibling<TransformComponent>();
+        if (!ensureBody(transform)) return;
 
         // Dynamic bodies are authoritative: write the simulated pose back onto the entity.
         // The sim works in world space and this writes into the local position/rotation, so a
@@ -57,18 +75,19 @@ namespace ytail {
         if (type == BodyType::Dynamic) {
             glm::vec3 pos; glm::quat rot;
             PhysicsManager::get().getBodyTransform(body, pos, rot);
-            transformComp->setPosition(pos);
-            transformComp->setRotation(rot);
+            transform->setPosition(pos);
+            transform->setRotation(rot);
         }
     }
 
     void RigidbodyComponent::tick(float deltaTime) {
         // we want to be able to edit the physics bodies in the editor so still run this on tick.
-        if (!ensureBody()) return;
+        const TransformComponent* transform = getSibling<TransformComponent>();
+        if (!ensureBody(transform)) return;
 
         // When we're paused we take the transform from the gizmo but if we're simulating we trust the simulation
         if (!GameplayStatics::isSimulating()) {
-            PhysicsManager::get().setBodyTransform(body, transformComp->getPosition(), transformComp->getRotation());
+            PhysicsManager::get().setBodyTransform(body, transform->getPosition(), transform->getRotation());
         }
     }
 

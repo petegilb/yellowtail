@@ -26,12 +26,12 @@ namespace ytail {
 
         SDL_GPUBufferCreateInfo vbInfo = {};
         vbInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
-        vbInfo.size  = bytes;
+        vbInfo.size = bytes;
         vertexBuffer = SDL_CreateGPUBuffer(device, &vbInfo);
 
         SDL_GPUTransferBufferCreateInfo tbInfo = {};
         tbInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        tbInfo.size  = bytes;
+        tbInfo.size = bytes;
         transferBuffer = SDL_CreateGPUTransferBuffer(device, &tbInfo);
 
         capacity = newCapacity;

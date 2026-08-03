@@ -10,20 +10,20 @@
 
 #include "Mesh.h"
 #include "Material.h"
-#include "../Entity.h"
+#include "../World.h"
 #include "../components/LightComponent.h"
 #include "../components/RenderComponent.h"
 #include "../components/TransformComponent.h"
 #include "../managers/ResourceManager.h"
 
 namespace ytail {
-    static constexpr int kFacesPerCube = 6;                // one slot = 6 cube-array layers
-    static constexpr int kMaxSlots = 256 / kFacesPerCube;  // layer index (slot*6+face) must fit a Uint8
+    static constexpr int kFacesPerCube = 6; // one slot = 6 cube-array layers
+    static constexpr int kMaxSlots = 256 / kFacesPerCube; // layer index (slot*6+face) must fit a Uint8
     static constexpr float kFaceFovDegrees = 90.0f;
-    static constexpr float kFaceNearPlane  = 0.05f;
+    static constexpr float kFaceNearPlane = 0.05f;
     // FNV-1a offset basis + golden-ratio mix, for the change-detection hash.
     static constexpr size_t kFnvOffsetBasis = 1469598103934665603ULL;
-    static constexpr size_t kHashMix        = 0x9e3779b97f4a7c15ULL;
+    static constexpr size_t kHashMix = 0x9e3779b97f4a7c15ULL;
 
     // D3D-style cube face order: +X, -X, +Y, -Y, +Z, -Z. Ups chosen to match the hardware's
     // sampled face for a given direction.
@@ -51,9 +51,9 @@ namespace ytail {
     void PointShadowRenderer::reset() {
         slotForLight.clear();
         lastActiveLights = 0;
-        lastCasterDraws  = 0;
-        lastCulled       = 0;
-        lastRegenerated  = 0;
+        lastCasterDraws = 0;
+        lastCulled = 0;
+        lastRegenerated = 0;
     }
 
     void PointShadowRenderer::ensureTexture() {
@@ -65,27 +65,26 @@ namespace ytail {
         cubeArray = nullptr;
 
         SDL_GPUTextureCreateInfo info = {};
-        info.type   = SDL_GPU_TEXTURETYPE_CUBE_ARRAY;
+        info.type = SDL_GPU_TEXTURETYPE_CUBE_ARRAY;
         info.format = resources->getShadowMapFormat();
         // Rendered to by the shadow pass, sampled by the lit shader.
-        info.usage  = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-        info.width  = static_cast<Uint32>(faceResolution);
+        info.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        info.width = static_cast<Uint32>(faceResolution);
         info.height = static_cast<Uint32>(faceResolution);
         info.layer_count_or_depth = static_cast<Uint32>(kFacesPerCube * maxShadowedPoints);
         info.num_levels = 1;
 
-        cubeArray    = SDL_CreateGPUTexture(device, &info);
-        currentRes   = faceResolution;      // record the attempt regardless of outcome
+        cubeArray = SDL_CreateGPUTexture(device, &info);
+        currentRes = faceResolution; // record the attempt regardless of outcome
         currentSlots = maxShadowedPoints;
-        cubeRecreated = true;               // cached layers are gone; generate() invalidates slots
+        cubeRecreated = true; // cached layers are gone; generate() invalidates slots
         if (cubeArray == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create point-shadow cube array: %s", SDL_GetError());
         }
     }
 
-    void PointShadowRenderer::generate(SDL_GPUCommandBuffer* commandBuffer,
-                                       const std::vector<Entity>& entities) {
-        reset();                        // clears slotForLight + stats; slot cache (slots) persists
+    void PointShadowRenderer::generate(SDL_GPUCommandBuffer* commandBuffer, const World& world) {
+        reset(); // clears slotForLight + stats; slot cache (slots) persists
         if (cubeArray == nullptr) return;
         SDL_GPUGraphicsPipeline* pipeline = resources->getPipeline(PipelineType::PointShadowDepth);
         if (pipeline == nullptr) return;
@@ -110,51 +109,47 @@ namespace ytail {
         // Shadow-casting point lights first (cheap component checks), so a scene without any skips
         // the per-caster gathering below entirely.
         std::vector<Candidate> candidates;
-        for (const Entity& entity : entities) {
-            const auto* light = entity.getComponent<LightComponent>();
-            const auto* xform = entity.getComponent<TransformComponent>();
-            if (light == nullptr || xform == nullptr) continue;
-            if (light->type != LightType::Point || !light->castsShadows) continue;
+        world.each<LightComponent, TransformComponent>(
+            [&](const EntityId id, const LightComponent& light, const TransformComponent& xform) {
+                if (light.type != LightType::Point || !light.castsShadows) return;
 
-            const float farPlane = light->attenuation;
-            if (farPlane <= kFaceNearPlane) continue; // degenerate radius; light stays unshadowed
+                const float farPlane = light.attenuation;
+                if (farPlane <= kFaceNearPlane) return; // degenerate radius; light stays unshadowed
 
-            candidates.push_back({ entity.getId(), glm::vec3(xform->worldMatrix()[3]), farPlane,
-                                   xform->getWorldVersion() });
-        }
+                candidates.push_back({ id, glm::vec3(xform.worldMatrix()[3]), farPlane,
+                                       xform.getWorldVersion() });
+            });
         if (candidates.empty()) return; // stale slot owners get reconciled next time a light exists
-        // Lowest ids win slots when over the cap, stable across dense-array reorders.
-        std::ranges::sort(candidates, {}, &Candidate::id);
+        // Lowest slot indices win cube slots when over the cap, stable across pool reorders.
+        std::ranges::sort(candidates, {}, [](const Candidate& cand) { return entityIndex(cand.id); });
 
         // World transform + bounding sphere for every shadow caster, computed once for the frame.
         std::vector<CasterInfo> allCasters;
-        for (const Entity& caster : entities) {
-            const auto* renderComponent = caster.getComponent<RenderComponent>();
-            const auto* casterXform = caster.getComponent<TransformComponent>();
-            if (renderComponent == nullptr || casterXform == nullptr) continue;
-            if (!renderComponent->castsShadow) continue;
-            const auto& mesh = renderComponent->mesh;
-            if (!mesh) continue;
+        world.each<RenderComponent, TransformComponent>(
+            [&](const EntityId castId, const RenderComponent& renderComponent, const TransformComponent& casterXform) {
+                if (!renderComponent.castsShadow) return;
+                const auto& mesh = renderComponent.mesh;
+                if (!mesh) return;
 
-            const glm::mat4 model = casterXform->worldMatrix();
-            const glm::vec3 center = glm::vec3(model * glm::vec4((mesh->aabbMin + mesh->aabbMax) * 0.5f, 1.0f));
-            const float localRadius = glm::length(mesh->aabbMax - mesh->aabbMin) * 0.5f;
-            // Rotation preserves column length, so the longest column is the max axis scale.
-            const float maxScale = glm::max(glm::length(glm::vec3(model[0])),
-                                   glm::max(glm::length(glm::vec3(model[1])),
-                                            glm::length(glm::vec3(model[2]))));
-            allCasters.push_back({ mesh.get(), model, center, localRadius * maxScale,
-                                   caster.getId(), casterXform->getWorldVersion() });
-        }
+                const glm::mat4 model = casterXform.worldMatrix();
+                const glm::vec3 center = glm::vec3(model * glm::vec4((mesh->aabbMin + mesh->aabbMax) * 0.5f, 1.0f));
+                const float localRadius = glm::length(mesh->aabbMax - mesh->aabbMin) * 0.5f;
+                // Rotation preserves column length, so the longest column is the max axis scale.
+                const float maxScale = glm::max(glm::length(glm::vec3(model[0])),
+                                       glm::max(glm::length(glm::vec3(model[1])),
+                                                glm::length(glm::vec3(model[2]))));
+                allCasters.push_back({ mesh.get(), model, center, localRadius * maxScale,
+                                       castId, casterXform.getWorldVersion() });
+            });
 
         // Cull casters per light and build each candidate's signature. Caster contributions are
         // summed (commutative), so an entity-map rehash that reorders iteration doesn't change the
         // signature and spuriously re-render every slot.
         for (Candidate& cand : candidates) {
             size_t sig = kFnvOffsetBasis;
-            hashCombine(sig, cand.lightVersion);  // light moved
+            hashCombine(sig, cand.lightVersion); // light moved
             Uint32 farBits; SDL_memcpy(&farBits, &cand.farPlane, sizeof(farBits));
-            hashCombine(sig, farBits);            // light radius changed
+            hashCombine(sig, farBits); // light radius changed
             size_t casterSum = 0;
             for (const CasterInfo& casterInfo : allCasters) {
                 if (glm::length(casterInfo.center - cand.lightPos) > cand.farPlane + casterInfo.radius) {
@@ -201,13 +196,13 @@ namespace ytail {
         // --- Decide which slots to re-render, honoring the per-frame budget ---
         // Never-generated (invalid) dirty slots render first so new lights don't sample garbage;
         // changed-but-valid slots are budgeted and rotated so no slot starves.
-        std::vector<int> renderNow;   // candidate indices to regenerate
-        std::vector<int> changed;     // candidate indices dirty-but-already-valid
+        std::vector<int> renderNow; // candidate indices to regenerate
+        std::vector<int> changed; // candidate indices dirty-but-already-valid
         for (int ci = 0; ci < static_cast<int>(candidates.size()); ++ci) {
             const Candidate& c = candidates[ci];
             if (c.slotIndex < 0) continue;
             const SlotState& s = slots[c.slotIndex];
-            if (!s.valid) renderNow.push_back(ci);              // first render is mandatory
+            if (!s.valid) renderNow.push_back(ci); // first render is mandatory
             else if (s.signature != c.signature) changed.push_back(ci);
         }
         const int budget = std::clamp(refreshBudgetPerFrame, 1, static_cast<int>(slots.size()));
@@ -231,14 +226,14 @@ namespace ytail {
                     proj * glm::lookAt(c.lightPos, c.lightPos + kFaceDir[face], kFaceUp[face]);
 
                 SDL_GPUDepthStencilTargetInfo target = {};
-                target.texture          = cubeArray;
-                target.layer            = static_cast<Uint8>(c.slotIndex * kFacesPerCube + face);
-                target.clear_depth      = 1.0f;
-                target.load_op          = SDL_GPU_LOADOP_CLEAR;
-                target.store_op         = SDL_GPU_STOREOP_STORE;
-                target.stencil_load_op  = SDL_GPU_LOADOP_DONT_CARE;
+                target.texture = cubeArray;
+                target.layer = static_cast<Uint8>(c.slotIndex * kFacesPerCube + face);
+                target.clear_depth = 1.0f;
+                target.load_op = SDL_GPU_LOADOP_CLEAR;
+                target.store_op = SDL_GPU_STOREOP_STORE;
+                target.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
                 target.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-                target.cycle            = false;
+                target.cycle = false;
 
                 SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commandBuffer, nullptr, 0, &target);
                 SDL_BindGPUGraphicsPipeline(pass, pipeline);
@@ -266,7 +261,7 @@ namespace ytail {
                 SDL_EndGPURenderPass(pass);
             }
 
-            slots[c.slotIndex].valid     = true;
+            slots[c.slotIndex].valid = true;
             slots[c.slotIndex].signature = c.signature;
             ++lastRegenerated;
         }

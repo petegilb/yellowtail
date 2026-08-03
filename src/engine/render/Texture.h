@@ -14,9 +14,9 @@ namespace ytail {
     public:
         Texture(SDL_GPUDevice* d, SDL_GPUTexture* t, Uint32 w, Uint32 h)
             : device(d), tex(t), width(w), height(h) {}
-        ~Texture() { if (tex) SDL_ReleaseGPUTexture(device, tex); }   // RAII
+        ~Texture() { if (tex) SDL_ReleaseGPUTexture(device, tex); } // RAII
 
-        Texture(const Texture&) = delete;             // non-copyable (owns a GPU handle)
+        Texture(const Texture&) = delete; // non-copyable (owns a GPU handle)
         Texture& operator=(const Texture&) = delete;
 
         SDL_GPUTexture* handle() const { return tex; }
@@ -24,8 +24,8 @@ namespace ytail {
         std::string sourcePath;
         Uint32 width = 0, height = 0;
     private:
-        SDL_GPUDevice*  device = nullptr;
-        SDL_GPUTexture* tex    = nullptr;
+        SDL_GPUDevice* device = nullptr;
+        SDL_GPUTexture* tex = nullptr;
     };
 } // ytail
 

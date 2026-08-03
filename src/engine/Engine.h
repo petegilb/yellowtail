@@ -106,9 +106,10 @@ namespace ytail {
         // Remove an entity and its whole subtree (all descendants go with it).
         void removeEntity(EntityId id);
 
-        // All entities, densely packed, for iteration (editor outliner, render loops). Pointers
-        // into it are transient: any add/remove can relocate entities.
-        [[nodiscard]] const std::vector<Entity>& getEntityList() const { return world.entities(); }
+        // Entity + component storage. Iteration, component access, and queries go through here;
+        // pointers into it are only safe until the next add/remove.
+        [[nodiscard]] World& getWorld() { return world; }
+        [[nodiscard]] const World& getWorld() const { return world; }
 
         void setActiveCamera(EntityId id);
 
@@ -146,19 +147,19 @@ namespace ytail {
 
         // Directional (sun) shadow map. The first directional light with castsShadows drives it.
         bool showShadows = false;
-        float shadowOrthoExtent = 40.0f;  // half-size of the ortho box, world units
-        float shadowDistance = 50.0f;     // how far back along -direction the light sits
+        float shadowOrthoExtent = 40.0f; // half-size of the ortho box, world units
+        float shadowDistance = 50.0f; // how far back along -direction the light sits
         float shadowNear = 1.0f;
         float shadowFar = 150.0f;
         float shadowBias = 0.0005f;
-        glm::vec3 shadowFocus{0.0f};      // world point the shadow box is centered on
+        glm::vec3 shadowFocus{0.0f}; // world point the shadow box is centered on
 
         // Omnidirectional shadows for point lights flagged castsShadows.
         bool showPointShadows = true;
-        float pointShadowBias = 0.0f;           // slope-scaled bias floor (back-face render needs none)
-        float pointShadowSlope = 0.0f;          // bias slope (× (1 - NdotL))
-        float pointShadowDiskRadius = 0.0032f;  // PCF softness (× distance)
-        int pointShadowBudget = 4;              // max cube slots re-rendered per frame (rest cached)
+        float pointShadowBias = 0.0f; // slope-scaled bias floor (back-face render needs none)
+        float pointShadowSlope = 0.0f; // bias slope (× (1 - NdotL))
+        float pointShadowDiskRadius = 0.0032f; // PCF softness (× distance)
+        int pointShadowBudget = 4; // max cube slots re-rendered per frame (rest cached)
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;
@@ -179,8 +180,8 @@ namespace ytail {
 
         // Sun shadow-map depth target (sampleable), rendered from the caster's POV.
         SDL_GPUTexture* shadowMapTexture = nullptr;
-        int shadowMapSize = 2048;         // desired resolution, tunable in the editor
-        int shadowMapCurrentSize = 0;     // resolution the current texture was created at
+        int shadowMapSize = 2048; // desired resolution, tunable in the editor
+        int shadowMapCurrentSize = 0; // resolution the current texture was created at
 
         // Light-space view*proj for the first directional shadow caster. False if none casts.
         [[nodiscard]] bool computeSunLightMatrix(glm::mat4& outLightViewProj) const;
@@ -219,16 +220,12 @@ namespace ytail {
         int framerateLock = 0;
         int drawCallsLastFrame = 0;
 
-        // Nonzero while the tick loops are iterating `entities`. addEntity/removeEntity assert on
-        // it: mutating the map mid-iteration is UB (defer spawns/destroys to after the loop).
-        int entityIterationDepth = 0;
-
         // world stuff
         glm::vec3 ambientLight{0.0f}; // currently set to ambientDebug
         World world;
 
-        // The camera to render from this frame. Resolved through the world each use, so a
-        // deleted camera fails the generation check instead of dangling. Must have a
+        // The camera to render from this frame. Looked up through the world each use, so a
+        // deleted camera becomes "no camera" instead of a dangling pointer. Must have a
         // TransformComponent (view) + CameraComponent (projection).
         EntityId activeCameraId = NULL_ENTITY;
 

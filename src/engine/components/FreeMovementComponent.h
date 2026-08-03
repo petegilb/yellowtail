@@ -37,10 +37,9 @@ namespace ytail
         void drawInspector() override;
 
     private:
-        // make sure we can get the transform from the transform component
-        bool ensureTransform();
-
-        TransformComponent* transformComp = nullptr;
+        // The entity's transform, looked up each tick (cached pointers go stale when pools
+        // change). Seeds yaw/pitch the first time. Nullptr if the entity has no transform.
+        TransformComponent* ensureTransform();
 
         // Look angles in degrees, owned here so we never decompose the quaternion.
         float yaw = 0.f;

@@ -82,7 +82,8 @@ public:
         std::array<SDL_GPUGraphicsPipeline*, static_cast<size_t>(PipelineType::Count)> pipelines{};
 
         // load a shader for a pipeline. this exists as a private helper for getPipeline since
-        // SDL_GPUShader are transient and should be released after SDL_CreateGPUGraphicsPipeline()
+        // an SDL_GPUShader is only needed while building the pipeline and should be released
+        // right after SDL_CreateGPUGraphicsPipeline()
         SDL_GPUShader* loadShader(
             SDL_GPUDevice* inDevice,
             const char* shaderFilename,

@@ -16,9 +16,9 @@ namespace ytail {
     // Mirrors cbuffer Camera from hlsl : register(b0, space1). All float4x4 → 64 bytes each,
     // naturally 16-byte aligned, so no padding needed between them.
     struct VertexUniform {
-        glm::mat4 mvp;           // projection * view * model  → clip position
-        glm::mat4 model;         // model alone               → world-space fragPos
-        glm::mat4 normalMatrix;  // transpose(inverse(model)) → world-space normal
+        glm::mat4 mvp; // projection * view * model  → clip position
+        glm::mat4 model; // model alone               → world-space fragPos
+        glm::mat4 normalMatrix; // transpose(inverse(model)) → world-space normal
     };
 
     // One light in the FrameLighting cbuffer's array. HLSL packs a scalar into the tail of a
@@ -26,8 +26,8 @@ namespace ytail {
     // Matches the Light struct in BlinnPhongLit.frag.hlsl member-for-member.
     struct GpuLight {
         glm::vec3 position;  float attenuation; // world position (point); attenuation radius
-        glm::vec3 direction; int type;          // travel direction (directional); 0 = point, 1 = directional
-        glm::vec3 color;     int shadowIndex;    // emission (color * intensity); cube slot, -1 = none
+        glm::vec3 direction; int type; // travel direction (directional); 0 = point, 1 = directional
+        glm::vec3 color;     int shadowIndex; // emission (color * intensity); cube slot, -1 = none
     };
     static_assert(sizeof(GpuLight) == 48, "GpuLight must match the shader Light struct layout");
 
@@ -39,8 +39,8 @@ namespace ytail {
     struct FrameLightingUniform {
         static constexpr int MaxLights = 16;
 
-        glm::vec3 viewPos; float _pad0;   // camera world position
-        glm::vec3 ambient; int lightCount;  // scene ambient (added once) + number of active lights
+        glm::vec3 viewPos; float _pad0; // camera world position
+        glm::vec3 ambient; int lightCount; // scene ambient (added once) + number of active lights
         GpuLight lights[MaxLights];
     };
     static_assert(sizeof(FrameLightingUniform) == 32 + 48 * FrameLightingUniform::MaxLights,
@@ -48,12 +48,12 @@ namespace ytail {
 
     // Mirrors cbuffer Shadow in BlinnPhongLit.frag.hlsl (b2, space3). Pushed once per frame.
     struct ShadowUniform {
-        glm::mat4 lightViewProj;     // world → sun clip space
-        float shadowBias = 0.0005f;  // sun depth-compare bias, fights acne
-        int shadowEnabled = 0;       // 0 = skip sun shadow sampling
-        float texelSize = 0.0f;      // 1 / shadowMapSize, sun PCF tap spacing
-        float pointBias = 0.0f;      // point cube: slope-scaled bias floor (back-face render needs none)
-        float pointSlope = 0.0f;     // point cube: bias slope, scales with (1 - NdotL)
+        glm::mat4 lightViewProj; // world → sun clip space
+        float shadowBias = 0.0005f; // sun depth-compare bias, fights acne
+        int shadowEnabled = 0; // 0 = skip sun shadow sampling
+        float texelSize = 0.0f; // 1 / shadowMapSize, sun PCF tap spacing
+        float pointBias = 0.0f; // point cube: slope-scaled bias floor (back-face render needs none)
+        float pointSlope = 0.0f; // point cube: bias slope, scales with (1 - NdotL)
         float pointDiskRadius = 0.0032f; // point cube: PCF disk scale (multiplied by distance)
         float _pad0 = 0.0f;
         float _pad1 = 0.0f;

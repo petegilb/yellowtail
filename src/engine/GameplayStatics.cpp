@@ -16,4 +16,8 @@ namespace ytail {
     bool GameplayStatics::isSimulating() {
         return getPlayState() == PlayState::Simulating;
     }
+
+    World* GameplayStatics::getWorld() {
+        return engine ? &engine->getWorld() : nullptr;
+    }
 } // ytail

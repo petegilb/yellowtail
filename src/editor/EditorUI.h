@@ -68,7 +68,7 @@ namespace ytail {
         void drawSaveAsDialog();
 
         // one entity row in the outliner tree, recursing into its children. Takes an id: actions
-        // inside (Duplicate) can relocate entity storage, so no Entity* survives the call.
+        // inside (Duplicate) can move entities in memory, so no Entity* survives the call.
         void drawOutlinerNode(Uint32 entityId);
         // inspector combo to set the selected entity's parent
         void drawParentSelector(Entity* entity);

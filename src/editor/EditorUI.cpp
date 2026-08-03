@@ -93,46 +93,44 @@ namespace ytail
         glm::vec3 origin, dir;
         if (!engine->screenPointToRay(screenX, screenY, origin, dir)) return;
 
+        World& world = engine->getWorld();
         Uint32 picked = 0;
         float bestT = FLT_MAX;
-        for (const Entity& entity : engine->getEntityList()) {
-            auto* transform = entity.getComponent<TransformComponent>();
-            auto* render = entity.getComponent<RenderComponent>();
-            if (!transform || !render || !render->mesh) continue;
+        world.each<RenderComponent, TransformComponent>(
+            [&](const EntityId id, const RenderComponent& render, const TransformComponent& transform) {
+                if (!render.mesh) return;
 
-            // Transform the ray into mesh-local space. localDir is left un-normalized so the hit
-            // distance stays in the same units across entities (nearest hit wins).
-            const glm::mat4 invModel = glm::inverse(transform->worldMatrix());
-            const glm::vec3 localOrigin = glm::vec3(invModel * glm::vec4(origin, 1.0f));
-            const glm::vec3 localDir    = glm::vec3(invModel * glm::vec4(dir, 0.0f));
+                // Transform the ray into mesh-local space. localDir is left un-normalized so the hit
+                // distance stays in the same units across entities (nearest hit wins).
+                const glm::mat4 invModel = glm::inverse(transform.worldMatrix());
+                const glm::vec3 localOrigin = glm::vec3(invModel * glm::vec4(origin, 1.0f));
+                const glm::vec3 localDir = glm::vec3(invModel * glm::vec4(dir, 0.0f));
 
-            float t;
-            if (rayAabb(localOrigin, localDir, render->mesh->aabbMin, render->mesh->aabbMax, t) && t < bestT) {
-                bestT = t;
-                picked = entity.getId();
-            }
-        }
+                float t;
+                if (rayAabb(localOrigin, localDir, render.mesh->aabbMin, render.mesh->aabbMax, t) && t < bestT) {
+                    bestT = t;
+                    picked = id;
+                }
+            });
 
         // Lights and inactive cameras have no mesh; pick their billboard icons via a small
         // world-space box at the entity position (t stays comparable to the mesh hits above).
-        for (const Entity& entity : engine->getEntityList()) {
-            auto* transform = entity.getComponent<TransformComponent>();
-            if (!transform) continue;
-            const bool hasLight  = entity.getComponent<LightComponent>() != nullptr;
-            const bool hasCamera = entity.getComponent<CameraComponent>() != nullptr
-                                   && entity.getId() != editor->getEditorCameraId();
-            if (!hasLight && !hasCamera) continue;
+        world.each<TransformComponent>([&](const EntityId id, const TransformComponent& transform) {
+            const bool hasLight = world.get<LightComponent>(id) != nullptr;
+            const bool hasCamera = world.get<CameraComponent>(id) != nullptr
+                                   && id != editor->getEditorCameraId();
+            if (!hasLight && !hasCamera) return;
 
             // World-space position, matching where the billboard icon is drawn (parented entities).
-            const glm::vec3 iconPos = glm::vec3(transform->worldMatrix()[3]);
+            const glm::vec3 iconPos = glm::vec3(transform.worldMatrix()[3]);
             const glm::vec3 boxMin = iconPos - glm::vec3(kEditorIconSize);
             const glm::vec3 boxMax = iconPos + glm::vec3(kEditorIconSize);
             float t;
             if (rayAabb(origin, dir, boxMin, boxMax, t) && t < bestT) {
                 bestT = t;
-                picked = entity.getId();
+                picked = id;
             }
-        }
+        });
 
         setSelected(picked);
     }
@@ -148,7 +146,7 @@ namespace ytail
 
         selectedEntity = id;
         selectedCollider = -1;
-        engine->selectedEntity = id;  // drives the selected point light's attenuation gizmo
+        engine->selectedEntity = id; // drives the selected point light's attenuation gizmo
 
         if (Entity* current = engine->getEntity(selectedEntity)){
             if (auto* renderComp = current->getComponent<RenderComponent>()){
@@ -184,11 +182,11 @@ namespace ytail
         }
 
         if (open) {
-            // Re-fetch: Duplicate above adds entities, which relocates storage.
+            // Look the entity up again: Duplicate above adds entities, which can move them.
             entity = engine->getEntity(entityId);
             if (entity != nullptr) {
                 std::vector<Uint32> childIds = entity->getChildIds();
-                std::sort(childIds.begin(), childIds.end());
+                std::sort(childIds.begin(), childIds.end(), entityIdLess);
                 for (const Uint32 childId : childIds) drawOutlinerNode(childId);
             }
             ImGui::TreePop();
@@ -215,10 +213,10 @@ namespace ytail
         }
 
         std::vector<Uint32> ids;
-        for (const Entity& other : engine->getEntityList()) {
+        for (const Entity& other : engine->getWorld().entities()) {
             if (other.getId() != entity->getId()) ids.push_back(other.getId());
         }
-        std::sort(ids.begin(), ids.end());
+        std::sort(ids.begin(), ids.end(), entityIdLess);
         for (const Uint32 id : ids) {
             Entity* other = engine->getEntity(id);
             if (!other) continue;
@@ -708,10 +706,10 @@ namespace ytail
             setSelected(created->getId());
         }
         std::vector<Uint32> rootIds;
-        for (const Entity& entity : engine->getEntityList()) {
+        for (const Entity& entity : engine->getWorld().entities()) {
             if (entity.getParentId() == NULL_ENTITY) rootIds.push_back(entity.getId());
         }
-        std::sort(rootIds.begin(), rootIds.end());
+        std::sort(rootIds.begin(), rootIds.end(), entityIdLess);
         for (const Uint32 id : rootIds) drawOutlinerNode(id);
         ImGui::End();
     }
@@ -725,7 +723,8 @@ namespace ytail
             if (ImGui::InputText("Name", &name)) {
                 entity->setName(name);
             }
-            ImGui::Text("Entity Id: %u", selectedEntity);
+            // Show the slot index; the raw handle's generation bits would make this a huge number.
+            ImGui::Text("Entity Id: %u", entityIndex(selectedEntity));
             drawParentSelector(entity);
 
             if (selectedEntity != editor->getEditorCameraId() && ImGui::Button("Delete Entity")) {
@@ -733,42 +732,43 @@ namespace ytail
             }
             ImGui::Separator();
 
-            Component* componentToRemove = nullptr;
-            for (const auto& component : entity->getComponents()) {
-                ImGui::PushID(component.get());
+            // Registry order (the pools don't track attach order). The ImGui id combines
+            // entity and serial id so header state is per entity, not per component pointer.
+            World& world = engine->getWorld();
+            const ComponentTypeInfo* componentToRemove = nullptr;
+            ImGui::PushID(static_cast<int>(selectedEntity));
+            for (const ComponentTypeInfo& info : engine->getComponentRegistry().getTypes()) {
+                Component* component = info.get(world, selectedEntity);
+                if (component == nullptr) continue;
+                ImGui::PushID(info.id.c_str());
                 if (ImGui::CollapsingHeader(component->getTypeName(), ImGuiTreeNodeFlags_DefaultOpen)) {
                     component->drawInspector();
-                    if (auto* render = dynamic_cast<RenderComponent*>(component.get())) {
+                    if (auto* render = dynamic_cast<RenderComponent*>(component)) {
                         drawRenderComponentAssets(render);
                     }
-                    if (auto* rigidbody = dynamic_cast<RigidbodyComponent*>(component.get())) {
+                    if (auto* rigidbody = dynamic_cast<RigidbodyComponent*>(component)) {
                         drawColliderGizmoTarget(rigidbody);
                     }
-                    if (ImGui::SmallButton("Remove Component")) componentToRemove = component.get();
+                    if (ImGui::SmallButton("Remove Component")) componentToRemove = &info;
                 }
                 ImGui::PopID();
             }
-            if (componentToRemove != nullptr) entity->removeComponent(componentToRemove);
+            ImGui::PopID();
+            if (componentToRemove != nullptr) componentToRemove->remove(world, selectedEntity);
 
             ImGui::Separator();
             if (ImGui::Button("Add Component")) ImGui::OpenPopup("AddComponentPopup");
             if (ImGui::BeginPopup("AddComponentPopup")) {
                 for (const ComponentTypeInfo& info : engine->getComponentRegistry().getTypes()) {
-                    bool alreadyHas = false;
-                    for (const auto& existing : entity->getComponents()) {
-                        if (info.id == existing->serialId()) { alreadyHas = true; break; }
-                    }
-                    if (alreadyHas) continue;
+                    if (info.get(world, selectedEntity) != nullptr) continue; // already has one
 
                     if (ImGui::MenuItem(info.displayName.c_str())) {
-                        if (auto component = engine->getComponentRegistry().create(info.id)) {
-                            // A fresh RenderComponent defaults to the sphere mesh + material.
-                            if (auto* render = dynamic_cast<RenderComponent*>(component.get())) {
-                                ResourceManager* resources = engine->getResourceManager();
-                                render->setMesh(resources->getMesh("models/sphere.glb"));
-                                render->addMaterial(resources->getMaterial("materials/sphere.mat"));
-                            }
-                            entity->addComponent(std::move(component));
+                        Component* component = info.emplace(world, selectedEntity);
+                        // A fresh RenderComponent defaults to the sphere mesh + material.
+                        if (auto* render = dynamic_cast<RenderComponent*>(component)) {
+                            ResourceManager* resources = engine->getResourceManager();
+                            render->setMesh(resources->getMesh("models/sphere.glb"));
+                            render->addMaterial(resources->getMaterial("materials/sphere.mat"));
                         }
                     }
                 }
@@ -804,8 +804,8 @@ namespace ytail
             ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
 
             ImGuiID center = dockspaceId;
-            const ImGuiID topId   = ImGui::DockBuilderSplitNode(center, ImGuiDir_Up,    0.06f, nullptr, &center);
-            const ImGuiID leftId  = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left,  0.18f, nullptr, &center);
+            const ImGuiID topId = ImGui::DockBuilderSplitNode(center, ImGuiDir_Up, 0.06f, nullptr, &center);
+            const ImGuiID leftId = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.18f, nullptr, &center);
             const ImGuiID rightId = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.22f, nullptr, &center);
 
             ImGui::DockBuilderDockWindow("Toolbar", topId);

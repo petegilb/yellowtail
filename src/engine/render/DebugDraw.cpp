@@ -70,9 +70,9 @@ namespace ytail {
         }
         // 12 edges: pairs of corners differing in exactly one axis bit.
         static const int edges[12][2] = {
-            {0,1},{2,3},{4,5},{6,7},  // along x
-            {0,2},{1,3},{4,6},{5,7},  // along y
-            {0,4},{1,5},{2,6},{3,7},  // along z
+            {0,1},{2,3},{4,5},{6,7}, // along x
+            {0,2},{1,3},{4,6},{5,7}, // along y
+            {0,4},{1,5},{2,6},{3,7}, // along z
         };
         for (const auto& e : edges) line(c[e[0]], c[e[1]], color);
     }

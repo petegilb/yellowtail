@@ -38,7 +38,7 @@ namespace {
     // Object layers: which broad groups of objects exist. Determines what collides with what.
     namespace Layers {
         static constexpr ObjectLayer NON_MOVING = 0;
-        static constexpr ObjectLayer MOVING     = 1;
+        static constexpr ObjectLayer MOVING = 1;
         static constexpr ObjectLayer NUM_LAYERS = 2;
     }
 
@@ -55,7 +55,7 @@ namespace {
     public:
         BPLayerInterfaceImpl() {
             objectToBroadPhase[Layers::NON_MOVING] = BroadPhaseLayers::NON_MOVING;
-            objectToBroadPhase[Layers::MOVING]     = BroadPhaseLayers::MOVING;
+            objectToBroadPhase[Layers::MOVING] = BroadPhaseLayers::MOVING;
         }
 
         virtual uint GetNumBroadPhaseLayers() const override {
@@ -98,8 +98,8 @@ namespace {
     public:
         virtual bool ShouldCollide(ObjectLayer inObject1, ObjectLayer inObject2) const override {
             switch (inObject1) {
-                case Layers::NON_MOVING: return inObject2 == Layers::MOVING;  // static only collides with movers
-                case Layers::MOVING:     return true;                          // movers collide with everything
+                case Layers::NON_MOVING: return inObject2 == Layers::MOVING; // static only collides with movers
+                case Layers::MOVING:     return true; // movers collide with everything
                 default: JPH_ASSERT(false); return false;
             }
         }
@@ -119,14 +119,14 @@ namespace {
     bool AssertFailedImpl(const char* inExpression, const char* inMessage, const char* inFile, uint inLine) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "[Jolt] %s:%u: (%s) %s",
             inFile, inLine, inExpression, inMessage != nullptr ? inMessage : "");
-        return true;  // true = trigger a breakpoint
+        return true; // true = trigger a breakpoint
     }
 #endif
 
     // Sizing limits for the physics world. Bump these if you exceed them.
-    constexpr uint cMaxBodies             = 1024;
-    constexpr uint cNumBodyMutexes        = 0;     // 0 = let Jolt pick a default
-    constexpr uint cMaxBodyPairs          = 1024;
+    constexpr uint cMaxBodies = 1024;
+    constexpr uint cNumBodyMutexes = 0; // 0 = let Jolt pick a default
+    constexpr uint cMaxBodyPairs = 1024;
     constexpr uint cMaxContactConstraints = 1024;
 
     // glm <-> Jolt conversions for the body API.
@@ -149,10 +149,10 @@ namespace {
 
 namespace ytail::physics {
     struct PhysicsManager::Impl {
-        TempAllocatorImpl tempAllocator{ 10 * 1024 * 1024 };  // 10 MiB scratch for the solver
+        TempAllocatorImpl tempAllocator{ 10 * 1024 * 1024 }; // 10 MiB scratch for the solver
         JobSystemThreadPool jobSystem{
             cMaxPhysicsJobs, cMaxPhysicsBarriers,
-            std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 1)  // leave one core for the main thread
+            std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 1) // leave one core for the main thread
         };
 
         BPLayerInterfaceImpl broadPhaseLayerInterface;
@@ -275,7 +275,7 @@ namespace ytail::physics {
 
         BodyManager::DrawSettings settings;
         settings.mDrawShape = true;
-        settings.mDrawShapeWireframe = true;  // routes shapes through DrawLine into the debug renderer's line buffer
+        settings.mDrawShapeWireframe = true; // routes shapes through DrawLine into the debug renderer's line buffer
         impl->physicsSystem.DrawBodies(settings, &impl->debugRenderer);
     }
 

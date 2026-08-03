@@ -1,3 +1,7 @@
+//
+// Created by Peter Gilbert on 7/30/26.
+//
+
 #include "World.h"
 
 #include <SDL3/SDL.h>
@@ -15,6 +19,7 @@ namespace ytail {
     }
 
     Entity* World::addEntity() {
+        SDL_assert(iterationDepth == 0 && "spawn during iteration; defer to after the loop");
         Uint32 index;
         if (!freeIndices.empty()) {
             index = freeIndices.back();
@@ -27,7 +32,8 @@ namespace ytail {
     }
 
     Entity* World::addEntityWithId(const EntityId id) {
-        // Loading runs on a cleared world, so no free-list entry can alias a claimed slot.
+        SDL_assert(iterationDepth == 0 && "spawn during iteration; defer to after the loop");
+        // Loading runs on a cleared world, so a reused index can't collide with a claimed slot.
         SDL_assert(freeIndices.empty() && "addEntityWithId on a non-fresh world");
         const Uint32 index = entityIndex(id);
         if (index == 0) {
@@ -36,7 +42,7 @@ namespace ytail {
         }
         if (index >= slots.size()) slots.resize(index + 1);
         Slot& slot = slots[index];
-        if (slot.denseIndex != NPOS) {
+        if (slot.denseIndex != NULL_INDEX) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Entity id %u already exists; refusing duplicate", id);
             return nullptr;
         }
@@ -48,7 +54,7 @@ namespace ytail {
         const Uint32 index = entityIndex(id);
         if (index == 0 || index >= slots.size()) return nullptr;
         const Slot& slot = slots[index];
-        if (slot.denseIndex == NPOS || slot.generation != entityGeneration(id)) return nullptr;
+        if (slot.denseIndex == NULL_INDEX || slot.generation != entityGeneration(id)) return nullptr;
         return &dense[slot.denseIndex];
     }
 
@@ -90,11 +96,16 @@ namespace ytail {
     }
 
     void World::removeSingle(const EntityId id) {
+        // Drop the entity's components first (runs their destructors, e.g. physics body release).
+        for (const auto& pool : pools) {
+            if (pool) pool->remove(id);
+        }
+
         const Uint32 index = entityIndex(id);
         Slot& slot = slots[index];
         const Uint32 denseIdx = slot.denseIndex;
 
-        // Swap-and-pop keeps dense packed; redirect the moved entity's slot to its new spot.
+        // Fill the gap with the last entity and point its slot at the new spot.
         const Uint32 lastIdx = static_cast<Uint32>(dense.size()) - 1;
         if (denseIdx != lastIdx) {
             dense[denseIdx] = std::move(dense[lastIdx]);
@@ -102,12 +113,13 @@ namespace ytail {
         }
         dense.pop_back();
 
-        slot.denseIndex = NPOS;
+        slot.denseIndex = NULL_INDEX;
         slot.generation = (slot.generation + 1) & ENTITY_GENERATION_MASK; // stale ids now fail lookup
         freeIndices.push_back(index);
     }
 
     void World::removeEntity(const EntityId id) {
+        SDL_assert(iterationDepth == 0 && "destroy during iteration; defer to after the loop");
         Entity* entity = getEntity(id);
         if (entity == nullptr) return;
 
@@ -126,8 +138,58 @@ namespace ytail {
     }
 
     void World::clear() {
+        SDL_assert(iterationDepth == 0 && "clear during iteration; defer to after the loop");
+        for (const auto& pool : pools) {
+            if (pool) pool->clear();
+        }
         dense.clear();
         slots.assign(1, {}); // slot 0 stays reserved
         freeIndices.clear();
+        // Queued commands point at the old scene's entities. The new scene reuses the same ids
+        // (generations reset here), so running them later could hit the wrong entity.
+        pendingCommands.clear();
+    }
+
+    void World::fixedTickAll(const float deltaTime) {
+        ++iterationDepth;
+        for (const auto& pool : pools) {
+            if (pool) pool->fixedTickAll(deltaTime);
+        }
+        --iterationDepth;
+        flushDeferred();
+    }
+
+    void World::tickAll(const float deltaTime) {
+        ++iterationDepth;
+        for (const auto& pool : pools) {
+            if (pool) pool->tickAll(deltaTime);
+        }
+        --iterationDepth;
+        flushDeferred();
+    }
+
+    void World::eventTickAll(const SDL_Event& event) {
+        ++iterationDepth;
+        for (const auto& pool : pools) {
+            if (pool) pool->eventTickAll(event);
+        }
+        --iterationDepth;
+        flushDeferred();
+    }
+
+    void World::defer(std::function<void(World&)> command) {
+        pendingCommands.push_back(std::move(command));
+    }
+
+    void World::deferDestroy(const EntityId id) {
+        defer([id](World& world) { world.removeEntity(id); });
+    }
+
+    void World::flushDeferred() {
+        while (!pendingCommands.empty()) { // commands may queue more commands
+            commandScratch.clear();
+            commandScratch.swap(pendingCommands);
+            for (const auto& command : commandScratch) command(*this);
+        }
     }
 } // ytail

@@ -33,8 +33,8 @@ namespace ytail {
     // Field order matches HLSL 16-byte packing: the two vec2s fill the first row, shininess
     // starts the second. uvScale defaults to 1 (no tiling), uvOffset to 0 (no shift).
     struct MaterialUniform {
-        glm::vec2 uvScale  = glm::vec2(1.0f);  // multiply UVs (tiling)
-        glm::vec2 uvOffset = glm::vec2(0.0f);  // add to UVs after scaling (shift/scroll)
+        glm::vec2 uvScale = glm::vec2(1.0f); // multiply UVs (tiling)
+        glm::vec2 uvOffset = glm::vec2(0.0f); // add to UVs after scaling (shift/scroll)
         float shininess = 64.0f;
         float _pad[3] = {};
     };

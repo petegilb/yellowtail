@@ -36,8 +36,8 @@ namespace ytail {
         SDL_GPUDevice* device = nullptr;
         SDL_GPUBuffer* vertexBuffer = nullptr;
         SDL_GPUTransferBuffer* transferBuffer = nullptr;
-        Uint32 capacity = 0;      // vertices the buffers can hold
-        Uint32 vertexCount = 0;   // vertices uploaded this frame
+        Uint32 capacity = 0; // vertices the buffers can hold
+        Uint32 vertexCount = 0; // vertices uploaded this frame
     };
 } // ytail
 

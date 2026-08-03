@@ -22,8 +22,8 @@ namespace ytail {
     struct BillboardItem {
         glm::vec3 position{0.0f};
         float size = 1.0f;
-        const Texture* texture = nullptr;   // non-owning
-        SDL_GPUSampler* sampler = nullptr;  // owned by the ResourceManager
+        const Texture* texture = nullptr; // non-owning
+        SDL_GPUSampler* sampler = nullptr; // owned by the ResourceManager
     };
 
     class BillboardRenderer {
@@ -39,7 +39,7 @@ namespace ytail {
 
     private:
         SDL_GPUDevice* device = nullptr;
-        SDL_GPUBuffer* vertexBuffer = nullptr;  // unit quad in the XY plane
+        SDL_GPUBuffer* vertexBuffer = nullptr; // unit quad in the XY plane
         SDL_GPUBuffer* indexBuffer = nullptr;
     };
 } // ytail

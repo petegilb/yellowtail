@@ -4,8 +4,8 @@
 
 #include "BillboardRenderer.h"
 
-#include "Mesh.h"                         // Vertex
-#include "../components/RenderComponent.h"  // VertexUniform
+#include "Mesh.h" // Vertex
+#include "../components/RenderComponent.h" // VertexUniform
 #include "Texture.h"
 
 namespace ytail {
@@ -13,31 +13,31 @@ namespace ytail {
         // Unit quad in the XY plane, centered on the origin, spanning [-0.5, 0.5]. UVs put (0,0)
         // at the top-left to match image space. Normal is +Z (unused by the billboard shader).
         constexpr Vertex kQuadVertices[4] = {
-            { {-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f} },  // bottom-left
-            { { 0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f} },  // bottom-right
-            { { 0.5f,  0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f} },  // top-right
-            { {-0.5f,  0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f} },  // top-left
+            { {-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f} }, // bottom-left
+            { { 0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f} }, // bottom-right
+            { { 0.5f,  0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f} }, // top-right
+            { {-0.5f,  0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f} }, // top-left
         };
         constexpr Uint32 kQuadIndices[6] = { 0, 1, 2, 0, 2, 3 };
     }
 
     BillboardRenderer::BillboardRenderer(SDL_GPUDevice* inDevice) : device(inDevice) {
         constexpr Uint32 vertexBytes = sizeof(kQuadVertices);
-        constexpr Uint32 indexBytes  = sizeof(kQuadIndices);
+        constexpr Uint32 indexBytes = sizeof(kQuadIndices);
 
         SDL_GPUBufferCreateInfo vbInfo = {};
         vbInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
-        vbInfo.size  = vertexBytes;
+        vbInfo.size = vertexBytes;
         vertexBuffer = SDL_CreateGPUBuffer(device, &vbInfo);
 
         SDL_GPUBufferCreateInfo ibInfo = {};
         ibInfo.usage = SDL_GPU_BUFFERUSAGE_INDEX;
-        ibInfo.size  = indexBytes;
+        ibInfo.size = indexBytes;
         indexBuffer = SDL_CreateGPUBuffer(device, &ibInfo);
 
         SDL_GPUTransferBufferCreateInfo tbInfo = {};
         tbInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        tbInfo.size  = vertexBytes + indexBytes;
+        tbInfo.size = vertexBytes + indexBytes;
         SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(device, &tbInfo);
 
         void* mapped = SDL_MapGPUTransferBuffer(device, transferBuffer, false);
@@ -77,7 +77,7 @@ namespace ytail {
 
         SDL_BindGPUGraphicsPipeline(renderPass, pipeline);
         SDL_GPUBufferBinding vertexBinding = { .buffer = vertexBuffer, .offset = 0 };
-        SDL_GPUBufferBinding indexBinding  = { .buffer = indexBuffer,  .offset = 0 };
+        SDL_GPUBufferBinding indexBinding = { .buffer = indexBuffer,  .offset = 0 };
         SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
         SDL_BindGPUIndexBuffer(renderPass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
 

@@ -9,6 +9,7 @@
 
 namespace ytail {
     class Engine;
+    class World;
 
     enum class PlayState : uint8_t { Paused, Simulating };
 
@@ -17,6 +18,9 @@ namespace ytail {
     public:
         [[nodiscard]] static PlayState getPlayState();
         [[nodiscard]] static bool isSimulating();
+
+        // The engine's entity/component storage, or nullptr before the engine exists.
+        [[nodiscard]] static World* getWorld();
 
     private:
         // the engine binds itself here at construction

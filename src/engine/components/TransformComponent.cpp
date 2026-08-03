@@ -6,33 +6,31 @@
 
 #include "imgui.h"
 
-#include "../Entity.h"
+#include "../World.h"
 #include "../serialize/Archive.h"
 #include "../serialize/GlmJson.h"
 
 namespace ytail {
     void TransformComponent::ensureWorld() const {
         Uint64 parentWorldVer = 0;
-        const TransformComponent* parentXform = nullptr;
+        EntityId parentId = NULL_ENTITY;
         glm::mat4 parentWorld(1.0f);
-        if (owner) {
-            if (Entity* parent = owner->getParent()) {
-                if (auto* parentTransform = parent->getComponent<TransformComponent>()) {
-                    parentTransform->ensureWorld(); // refresh ancestor; same-class private access
-                    parentXform    = parentTransform;
-                    parentWorld    = parentTransform->cachedWorld;
-                    parentWorldVer = parentTransform->worldVersion;
-                }
+        if (const Entity* ownerEntity = getOwner()) {
+            if (const TransformComponent* parentTransform = world->get<TransformComponent>(ownerEntity->getParentId())) {
+                parentTransform->ensureWorld(); // refresh ancestor; same-class private access
+                parentId = parentTransform->getOwnerId();
+                parentWorld = parentTransform->cachedWorld;
+                parentWorldVer = parentTransform->worldVersion;
             }
         }
         // Compare parent identity too: after a reparent, the new parent's version can equal the old
         // one's (every never-moved transform sits at 1), which would keep a stale world matrix.
         if (cachedLocalVer != localVersion || cachedParentWorldVer != parentWorldVer
-            || cachedParentXform != parentXform) {
-            cachedWorld          = parentWorld * localMatrix();
-            cachedLocalVer       = localVersion;
+            || cachedParentId != parentId) {
+            cachedWorld = parentWorld * localMatrix();
+            cachedLocalVer = localVersion;
             cachedParentWorldVer = parentWorldVer;
-            cachedParentXform    = parentXform;
+            cachedParentId = parentId;
             ++worldVersion;
             normalValid = false;
         }

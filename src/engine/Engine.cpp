@@ -176,8 +176,9 @@ namespace ytail {
                 SDL_SetWindowTitle(window, title);
                 fps = 0;
             }
-
-            FrameMark;  // Tracy frame boundary
+            
+            // Tracy frame boundary
+            FrameMark; 
         }
     }
 
@@ -202,14 +203,11 @@ namespace ytail {
             }
         }
 
-        // Variable-step per-frame work (runs as fast as we render): engine, then app, then components.
+        // Variable-step per-frame work (runs as fast as we render): engine, then app, then
+        // components pool-by-pool (all of one type, then the next, in registration order).
         updateTick();
         if (app) app->tick(deltaTime);
-        ++entityIterationDepth;
-        for (Entity& entity : world.entities()) {
-            entity.tick(deltaTime);
-        }
-        --entityIterationDepth;
+        world.tickAll(deltaTime);
 
         // UI should be updated right before everything is drawn to match the state of the engine.
         uiTick();
@@ -227,11 +225,7 @@ namespace ytail {
             physics::PhysicsManager::get().step(deltaTime);
         }
         if (app) app->fixedTick(deltaTime);
-        ++entityIterationDepth;
-        for (Entity& entity : world.entities()) {
-            entity.fixedTick(deltaTime);
-        }
-        --entityIterationDepth;
+        world.fixedTickAll(deltaTime);
         tickNumber++;
     }
 
@@ -241,11 +235,7 @@ namespace ytail {
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (app) app->eventTick(event);
-            ++entityIterationDepth;
-            for (Entity& entity : world.entities()) {
-                entity.eventTick(event);
-            }
-            --entityIterationDepth;
+            world.eventTickAll(event);
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)) {
                 bRunning = false;
                 return;
@@ -280,13 +270,13 @@ namespace ytail {
         if (depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
 
         SDL_GPUTextureCreateInfo info = {};
-        info.type                 = SDL_GPU_TEXTURETYPE_2D;
-        info.format               = resourceManager->getDepthStencilFormat();
-        info.usage                = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
-        info.width                = static_cast<Uint32>(width);
-        info.height               = static_cast<Uint32>(height);
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = resourceManager->getDepthStencilFormat();
+        info.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+        info.width = static_cast<Uint32>(width);
+        info.height = static_cast<Uint32>(height);
         info.layer_count_or_depth = 1;
-        info.num_levels           = 1;
+        info.num_levels = 1;
         depthTexture = SDL_CreateGPUTexture(device, &info);
         depthTextureW = width;
         depthTextureH = height;
@@ -300,14 +290,14 @@ namespace ytail {
         if (shadowMapTexture) SDL_ReleaseGPUTexture(device, shadowMapTexture);
 
         SDL_GPUTextureCreateInfo info = {};
-        info.type                 = SDL_GPU_TEXTURETYPE_2D;
+        info.type = SDL_GPU_TEXTURETYPE_2D;
         // Sampleable depth: written by the shadow pass, read by the lit shader.
-        info.format               = resourceManager->getShadowMapFormat();
-        info.usage                = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-        info.width                = static_cast<Uint32>(size);
-        info.height               = static_cast<Uint32>(size);
+        info.format = resourceManager->getShadowMapFormat();
+        info.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        info.width = static_cast<Uint32>(size);
+        info.height = static_cast<Uint32>(size);
         info.layer_count_or_depth = 1;
-        info.num_levels           = 1;
+        info.num_levels = 1;
         shadowMapTexture = SDL_CreateGPUTexture(device, &info);
         shadowMapCurrentSize = size;
         if (shadowMapTexture == nullptr) {
@@ -316,17 +306,15 @@ namespace ytail {
     }
 
     bool Engine::computeSunLightMatrix(glm::mat4& outLightViewProj) const {
-        // Lowest-id directional light flagged to cast shadows drives the map. Lowest id (not
-        // storage order) so the pick is stable when swap-remove reorders the dense array.
+        // Lowest-slot-index directional light flagged to cast shadows drives the map. Slot index
+        // (not storage order) so the pick doesn't change when removals reorder the pools.
         const TransformComponent* sunTransform = nullptr;
         EntityId sunId = NULL_ENTITY;
-        for (const Entity& entity : world.entities()) {
-            const auto* light = entity.getComponent<LightComponent>();
-            const auto* transform = entity.getComponent<TransformComponent>();
-            if (light == nullptr || transform == nullptr) continue;
-            if (light->type != LightType::Directional || !light->castsShadows) continue;
-            if (sunTransform == nullptr || entity.getId() < sunId) { sunTransform = transform; sunId = entity.getId(); }
-        }
+        world.each<LightComponent, TransformComponent>(
+            [&](const EntityId id, const LightComponent& light, const TransformComponent& transform) {
+                if (light.type != LightType::Directional || !light.castsShadows) return;
+                if (sunTransform == nullptr || entityIdLess(id, sunId)) { sunTransform = &transform; sunId = id; }
+            });
         if (sunTransform == nullptr) return false;
 
         // -Z rotated into world space (same as the lit path).
@@ -347,7 +335,7 @@ namespace ytail {
     void Engine::getRenderTargetSize(int& outWidth, int& outHeight) const {
         int pw, ph;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
-        outWidth  = std::max(1, static_cast<int>(static_cast<float>(pw) * resolutionScale));
+        outWidth = std::max(1, static_cast<int>(static_cast<float>(pw) * resolutionScale));
         outHeight = std::max(1, static_cast<int>(static_cast<float>(ph) * resolutionScale));
     }
 
@@ -356,14 +344,14 @@ namespace ytail {
         if (sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
 
         SDL_GPUTextureCreateInfo info = {};
-        info.type                 = SDL_GPU_TEXTURETYPE_2D;
+        info.type = SDL_GPU_TEXTURETYPE_2D;
         // Match the swapchain format the pipelines are built against, and allow sampling for the blit.
-        info.format               = SDL_GetGPUSwapchainTextureFormat(device, window);
-        info.usage                = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-        info.width                = static_cast<Uint32>(width);
-        info.height               = static_cast<Uint32>(height);
+        info.format = SDL_GetGPUSwapchainTextureFormat(device, window);
+        info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        info.width = static_cast<Uint32>(width);
+        info.height = static_cast<Uint32>(height);
         info.layer_count_or_depth = 1;
-        info.num_levels           = 1;
+        info.num_levels = 1;
         sceneColorTexture = SDL_CreateGPUTexture(device, &info);
         sceneColorW = width;
         sceneColorH = height;
@@ -481,13 +469,13 @@ namespace ytail {
 
         for (int i = -extent; i <= extent; ++i) {
             const float x = cx + static_cast<float>(i) * spacing;
-            const glm::vec3& color = std::abs(x) < 0.5f * spacing ? zAxis : gray;  // world x==0 -> Z axis
+            const glm::vec3& color = std::abs(x) < 0.5f * spacing ? zAxis : gray; // world x==0 -> Z axis
             out.push_back({ {x, 0.0f, cz - half}, glm::vec4(color, 1.0f) });
             out.push_back({ {x, 0.0f, cz + half}, glm::vec4(color, 1.0f) });
         }
         for (int i = -extent; i <= extent; ++i) {
             const float z = cz + static_cast<float>(i) * spacing;
-            const glm::vec3& color = std::abs(z) < 0.5f * spacing ? xAxis : gray;  // world z==0 -> X axis
+            const glm::vec3& color = std::abs(z) < 0.5f * spacing ? xAxis : gray; // world z==0 -> X axis
             out.push_back({ {cx - half, 0.0f, z}, glm::vec4(color, 1.0f) });
             out.push_back({ {cx + half, 0.0f, z}, glm::vec4(color, 1.0f) });
         }
@@ -495,27 +483,23 @@ namespace ytail {
 
     // Light gizmos tinted with each light's color
     static void buildLightGizmos(DebugDraw& debug,
-        const std::vector<Entity>& entities,
+        const World& world,
         Uint32 selectedEntity
     ) {
         debug.clear();
-        for (const Entity& entity : entities) {
-            const EntityId id = entity.getId();
-            const auto* light = entity.getComponent<LightComponent>();
-            const auto* transform = entity.getComponent<TransformComponent>();
-            if (light == nullptr || transform == nullptr) continue;
+        world.each<LightComponent, TransformComponent>(
+            [&](const EntityId id, const LightComponent& light, const TransformComponent& transform) {
+                const glm::vec4 color(light.color, 1.0f);
+                // World-space so gizmos sit where the light actually lights (matters when parented).
+                const glm::vec3 pos = glm::vec3(transform.worldMatrix()[3]);
 
-            const glm::vec4 color(light->color, 1.0f);
-            // World-space so gizmos sit where the light actually lights (matters when parented).
-            const glm::vec3 pos = glm::vec3(transform->worldMatrix()[3]);
-
-            if (light->type == LightType::Directional) {
-                const glm::vec3 dir = glm::normalize(transform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
-                debug.arrow(pos, pos + dir * 1.5f, color);
-            } else if (id == selectedEntity && light->attenuation > 0.0f) {
-                debug.wireSphere(pos, light->attenuation, color);
-            }
-        }
+                if (light.type == LightType::Directional) {
+                    const glm::vec3 dir = glm::normalize(transform.getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
+                    debug.arrow(pos, pos + dir * 1.5f, color);
+                } else if (id == selectedEntity && light.attenuation > 0.0f) {
+                    debug.wireSphere(pos, light.attenuation, color);
+                }
+            });
     }
 
     int Engine::renderTick(float alpha) {
@@ -593,7 +577,7 @@ namespace ytail {
 
         // Editor light gizmos: rebuild + stage (same before-pass copy rule).
         if (showLightGizmos && gizmoLineRenderer) {
-            buildLightGizmos(gizmoDraw, world.entities(), selectedEntity);
+            buildLightGizmos(gizmoDraw, world, selectedEntity);
             gizmoLineRenderer->upload(commandBuffer, gizmoDraw.vertices());
         }
 
@@ -607,40 +591,38 @@ namespace ytail {
                                   && computeSunLightMatrix(lightViewProj);
         if (hasShadowCaster) {
             SDL_GPUDepthStencilTargetInfo shadowTargetInfo = {};
-            shadowTargetInfo.texture          = shadowMapTexture;
-            shadowTargetInfo.clear_depth      = 1.0f;
-            shadowTargetInfo.load_op          = SDL_GPU_LOADOP_CLEAR;
-            shadowTargetInfo.store_op         = SDL_GPU_STOREOP_STORE;  // sampled in the scene pass
-            shadowTargetInfo.stencil_load_op  = SDL_GPU_LOADOP_DONT_CARE;
+            shadowTargetInfo.texture = shadowMapTexture;
+            shadowTargetInfo.clear_depth = 1.0f;
+            shadowTargetInfo.load_op = SDL_GPU_LOADOP_CLEAR;
+            shadowTargetInfo.store_op = SDL_GPU_STOREOP_STORE; // sampled in the scene pass
+            shadowTargetInfo.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
             shadowTargetInfo.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-            shadowTargetInfo.cycle            = true;
+            shadowTargetInfo.cycle = true;
 
             SDL_GPURenderPass* shadowPass = SDL_BeginGPURenderPass(commandBuffer, nullptr, 0, &shadowTargetInfo);
             SDL_GPUGraphicsPipeline* shadowPipeline = resourceManager->getPipeline(PipelineType::ShadowDepth);
             if (shadowPipeline) {
                 SDL_BindGPUGraphicsPipeline(shadowPass, shadowPipeline);
-                for (const Entity& entity : world.entities()) {
-                    const auto* renderComponent = entity.getComponent<RenderComponent>();
-                    const auto* transformComponent = entity.getComponent<TransformComponent>();
-                    if (renderComponent == nullptr || transformComponent == nullptr) continue;
-                    if (!renderComponent->castsShadow) continue;
-                    const auto& mesh = renderComponent->mesh;
-                    if (!mesh) continue;
+                world.each<RenderComponent, TransformComponent>(
+                    [&](EntityId, const RenderComponent& renderComponent, const TransformComponent& transformComponent) {
+                        if (!renderComponent.castsShadow) return;
+                        const auto& mesh = renderComponent.mesh;
+                        if (!mesh) return;
 
-                    SDL_GPUBufferBinding vertexBinding { .buffer = mesh->vertexBuffer, .offset = 0 };
-                    SDL_GPUBufferBinding indexBinding { .buffer = mesh->indexBuffer, .offset = 0 };
-                    SDL_BindGPUVertexBuffers(shadowPass, 0, &vertexBinding, 1);
-                    SDL_BindGPUIndexBuffer(shadowPass, &indexBinding, mesh->indexSize);
+                        SDL_GPUBufferBinding vertexBinding { .buffer = mesh->vertexBuffer, .offset = 0 };
+                        SDL_GPUBufferBinding indexBinding { .buffer = mesh->indexBuffer, .offset = 0 };
+                        SDL_BindGPUVertexBuffers(shadowPass, 0, &vertexBinding, 1);
+                        SDL_BindGPUIndexBuffer(shadowPass, &indexBinding, mesh->indexSize);
 
-                    const glm::mat4 lightMvp = lightViewProj * transformComponent->worldMatrix();
-                    SDL_PushGPUVertexUniformData(commandBuffer, 0, &lightMvp, sizeof(lightMvp));
+                        const glm::mat4 lightMvp = lightViewProj * transformComponent.worldMatrix();
+                        SDL_PushGPUVertexUniformData(commandBuffer, 0, &lightMvp, sizeof(lightMvp));
 
-                    for (const Submesh& submesh : mesh->submeshes) {
-                        SDL_DrawGPUIndexedPrimitives(shadowPass, submesh.indexCount, 1,
-                            submesh.indexOffset, 0, 0);
-                        drawCallsLastFrame++;
-                    }
-                }
+                        for (const Submesh& submesh : mesh->submeshes) {
+                            SDL_DrawGPUIndexedPrimitives(shadowPass, submesh.indexCount, 1,
+                                submesh.indexOffset, 0, 0);
+                            drawCallsLastFrame++;
+                        }
+                    });
             }
             SDL_EndGPURenderPass(shadowPass);
         }
@@ -651,7 +633,7 @@ namespace ytail {
         pointShadowRenderer->ensureTexture();
         if (showPointShadows) {
             pointShadowRenderer->refreshBudgetPerFrame = pointShadowBudget;
-            pointShadowRenderer->generate(commandBuffer, world.entities());
+            pointShadowRenderer->generate(commandBuffer, world);
         } else {
             pointShadowRenderer->reset(); // clear stale slots + stats so nothing samples last frame's cube
         }
@@ -660,14 +642,14 @@ namespace ytail {
         // stencil clears to 0. Neither is needed after the frame, so we don't store them.
         // https://github.com/TheSpydog/SDL_gpu_examples/blob/main/Examples/DepthArray.c
         SDL_GPUDepthStencilTargetInfo depthTargetInfo = {};
-        depthTargetInfo.texture          = depthTexture;
-        depthTargetInfo.clear_depth      = 1.0f;
-        depthTargetInfo.load_op          = SDL_GPU_LOADOP_CLEAR;
-        depthTargetInfo.store_op         = SDL_GPU_STOREOP_DONT_CARE;
-        depthTargetInfo.stencil_load_op  = SDL_GPU_LOADOP_CLEAR;
+        depthTargetInfo.texture = depthTexture;
+        depthTargetInfo.clear_depth = 1.0f;
+        depthTargetInfo.load_op = SDL_GPU_LOADOP_CLEAR;
+        depthTargetInfo.store_op = SDL_GPU_STOREOP_DONT_CARE;
+        depthTargetInfo.stencil_load_op = SDL_GPU_LOADOP_CLEAR;
         depthTargetInfo.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-        depthTargetInfo.clear_stencil    = 0;
-        depthTargetInfo.cycle            = true;
+        depthTargetInfo.clear_stencil = 0;
+        depthTargetInfo.cycle = true;
 
         // render all pipelines for all materials here...
         SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(commandBuffer, &colorTargetInfo, 1, &depthTargetInfo);
@@ -681,29 +663,27 @@ namespace ytail {
         FrameLightingUniform frameLighting{};
         frameLighting.viewPos = camXform->getPosition();
         frameLighting.ambient = ambientLight;
-        // Gather + sort by id so which lights make the MaxLights cut is stable across
-        // swap-remove reorders of the dense array.
+        // Gather + sort by slot index so which lights make the MaxLights cut doesn't change
+        // when removals reorder the pools.
         struct SceneLight { EntityId id; const LightComponent* light; const TransformComponent* transform; };
         std::vector<SceneLight> sceneLights;
-        for (const Entity& lightEntity : world.entities()) {
-            const auto* lightComp = lightEntity.getComponent<LightComponent>();
-            const auto* lightXform = lightEntity.getComponent<TransformComponent>();
-            if (lightComp == nullptr || lightXform == nullptr) continue;
-            sceneLights.push_back({ lightEntity.getId(), lightComp, lightXform });
-        }
-        std::ranges::sort(sceneLights, {}, &SceneLight::id);
+        world.each<LightComponent, TransformComponent>(
+            [&](const EntityId id, const LightComponent& lightComp, const TransformComponent& lightXform) {
+                sceneLights.push_back({ id, &lightComp, &lightXform });
+            });
+        std::ranges::sort(sceneLights, {}, [](const SceneLight& sceneLight) { return entityIndex(sceneLight.id); });
 
         int lightCount = 0;
         for (const SceneLight& sceneLight : sceneLights) {
             if (lightCount >= FrameLightingUniform::MaxLights) break;
             GpuLight& gpuLight = frameLighting.lights[lightCount];
             // World-space so lighting + shadows agree with parented lights (see PointShadowRenderer).
-            gpuLight.position    = glm::vec3(sceneLight.transform->worldMatrix()[3]);
+            gpuLight.position = glm::vec3(sceneLight.transform->worldMatrix()[3]);
             // Forward (-Z) rotated into world space: the direction a directional light travels.
-            gpuLight.direction   = glm::normalize(sceneLight.transform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
-            gpuLight.color       = sceneLight.light->color * sceneLight.light->intensity;
+            gpuLight.direction = glm::normalize(sceneLight.transform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f));
+            gpuLight.color = sceneLight.light->color * sceneLight.light->intensity;
             gpuLight.attenuation = sceneLight.light->attenuation;
-            gpuLight.type        = static_cast<int>(sceneLight.light->type);
+            gpuLight.type = static_cast<int>(sceneLight.light->type);
             // Cube slice for a shadowed point light this frame, or -1 (slotForLightId handles both).
             gpuLight.shadowIndex = showPointShadows ? pointShadowRenderer->slotForLightId(sceneLight.id) : -1;
             lightCount++;
@@ -715,11 +695,11 @@ namespace ytail {
         // every lit draw. Materials only touch slots 0-1, so these persist across the loop.
         ShadowUniform shadowUniform{};
         shadowUniform.lightViewProj = lightViewProj;
-        shadowUniform.shadowBias    = shadowBias;
+        shadowUniform.shadowBias = shadowBias;
         shadowUniform.shadowEnabled = hasShadowCaster ? 1 : 0;
-        shadowUniform.texelSize     = 1.0f / static_cast<float>(shadowMapSize);
-        shadowUniform.pointBias       = pointShadowBias;
-        shadowUniform.pointSlope      = pointShadowSlope;
+        shadowUniform.texelSize = 1.0f / static_cast<float>(shadowMapSize);
+        shadowUniform.pointBias = pointShadowBias;
+        shadowUniform.pointSlope = pointShadowSlope;
         shadowUniform.pointDiskRadius = pointShadowDiskRadius;
         SDL_PushGPUFragmentUniformData(commandBuffer, 2, &shadowUniform, sizeof(shadowUniform));
 
@@ -744,13 +724,10 @@ namespace ytail {
 
         // for each render component and transform component, get the mesh and the material in order to render it
         // TODO optimize this by pipeline binding (rebinding the same pipeline multiple times is a waste of resources)
-        for (const Entity& entity : world.entities()) {
-            const auto* renderComponent = entity.getComponent<RenderComponent>();
-            const auto* transformComponent = entity.getComponent<TransformComponent>();
-            if (renderComponent == nullptr || transformComponent == nullptr) continue;
-
-            auto& mesh = renderComponent->mesh;
-            if (!mesh) continue;
+        world.each<RenderComponent, TransformComponent>(
+            [&](EntityId, const RenderComponent& renderComponent, const TransformComponent& transformComponent) {
+            const auto& mesh = renderComponent.mesh;
+            if (!mesh) return;
 
             // get vertex and index buffers from mesh
             SDL_GPUBufferBinding vertexBinding { .buffer = mesh->vertexBuffer, .offset = 0 };
@@ -758,18 +735,18 @@ namespace ytail {
             SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
             SDL_BindGPUIndexBuffer(renderPass, &indexBinding, mesh->indexSize);
             // transform uniform (uses the camera input from the top of this function)
-            const glm::mat4 model = transformComponent->worldMatrix();
+            const glm::mat4 model = transformComponent.worldMatrix();
             VertexUniform vsu{
                 projection * view * model,
                 model,
-                transformComponent->normalMatrix()
+                transformComponent.normalMatrix()
             };
             SDL_PushGPUVertexUniformData(commandBuffer, 0, &vsu, sizeof(vsu));
 
 
             // how do i integrate these buffers and our pipeline and draw properly?
 
-            const auto& materials = renderComponent->materials;
+            const auto& materials = renderComponent.materials;
 
             for (const Submesh& submesh : mesh->submeshes) {
                 if (submesh.materialSlot >= materials.size()){
@@ -782,7 +759,7 @@ namespace ytail {
                     continue;
                 }
 
-                SDL_GPUGraphicsPipeline* pipeline = resourceManager->getPipeline(material->pipelineType, renderComponent->outline);
+                SDL_GPUGraphicsPipeline* pipeline = resourceManager->getPipeline(material->pipelineType, renderComponent.outline);
                 if (!pipeline) continue;
                 SDL_BindGPUGraphicsPipeline(renderPass, pipeline);
                 if (!material->textures.empty()){
@@ -812,7 +789,7 @@ namespace ytail {
                 // count draw calls (not including imgui and other things drawing)
                 drawCallsLastFrame++;
             }
-        }
+        });
 
         // Outline pass: for each outlined object, draw a slightly scaled shell in a flat color.
         // The stencil test (NOT_EQUAL 1) in the Outline pipeline clips it to the ring just outside
@@ -821,34 +798,32 @@ namespace ytail {
         SDL_GPUGraphicsPipeline* outlinePipeline = resourceManager->getPipeline(PipelineType::Outline);
         if (outlinePipeline) {
             SDL_BindGPUGraphicsPipeline(renderPass, outlinePipeline);
-            for (const Entity& entity : world.entities()) {
-                const auto* renderComponent = entity.getComponent<RenderComponent>();
-                const auto* transformComponent = entity.getComponent<TransformComponent>();
-                if (renderComponent == nullptr || transformComponent == nullptr) continue;
-                if (!renderComponent->outline) continue;
-                const auto& mesh = renderComponent->mesh;
-                if (!mesh) continue;
+            world.each<RenderComponent, TransformComponent>(
+                [&](EntityId, const RenderComponent& renderComponent, const TransformComponent& transformComponent) {
+                    if (!renderComponent.outline) return;
+                    const auto& mesh = renderComponent.mesh;
+                    if (!mesh) return;
 
-                SDL_GPUBufferBinding vertexBinding { .buffer = mesh->vertexBuffer, .offset = 0 };
-                SDL_GPUBufferBinding indexBinding { .buffer = mesh->indexBuffer, .offset = 0 };
-                SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
-                SDL_BindGPUIndexBuffer(renderPass, &indexBinding, mesh->indexSize);
+                    SDL_GPUBufferBinding vertexBinding { .buffer = mesh->vertexBuffer, .offset = 0 };
+                    SDL_GPUBufferBinding indexBinding { .buffer = mesh->indexBuffer, .offset = 0 };
+                    SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
+                    SDL_BindGPUIndexBuffer(renderPass, &indexBinding, mesh->indexSize);
 
-                // Scale the model about its local origin so the shell pokes out past the mesh.
-                const glm::mat4 model = transformComponent->worldMatrix()
-                    * glm::scale(glm::mat4(1.0f), glm::vec3(renderComponent->outlineScale));
-                VertexUniform vsu{ projection * view * model, model, glm::mat4(1.0f) };
-                SDL_PushGPUVertexUniformData(commandBuffer, 0, &vsu, sizeof(vsu));
+                    // Scale the model about its local origin so the shell pokes out past the mesh.
+                    const glm::mat4 model = transformComponent.worldMatrix()
+                        * glm::scale(glm::mat4(1.0f), glm::vec3(renderComponent.outlineScale));
+                    VertexUniform vsu{ projection * view * model, model, glm::mat4(1.0f) };
+                    SDL_PushGPUVertexUniformData(commandBuffer, 0, &vsu, sizeof(vsu));
 
-                const glm::vec4 outlineColor{ renderComponent->outlineColor, 1.0f };
-                SDL_PushGPUFragmentUniformData(commandBuffer, 0, &outlineColor, sizeof(outlineColor));
+                    const glm::vec4 outlineColor{ renderComponent.outlineColor, 1.0f };
+                    SDL_PushGPUFragmentUniformData(commandBuffer, 0, &outlineColor, sizeof(outlineColor));
 
-                for (const Submesh& submesh : mesh->submeshes) {
-                    SDL_DrawGPUIndexedPrimitives(renderPass, submesh.indexCount, 1,
-                        submesh.indexOffset, 0, 0);
-                    drawCallsLastFrame++;
-                }
-            }
+                    for (const Submesh& submesh : mesh->submeshes) {
+                        SDL_DrawGPUIndexedPrimitives(renderPass, submesh.indexCount, 1,
+                            submesh.indexOffset, 0, 0);
+                        drawCallsLastFrame++;
+                    }
+                });
         }
 
         // Editor grid, under the scene geometry (drawn first, depth-tested). The fragment shader
@@ -883,22 +858,19 @@ namespace ytail {
             std::vector<BillboardItem>& icons = iconScratch;
             icons.clear();
             SDL_GPUSampler* sampler = resourceManager->getSampler(SamplerType::LinearClamp);
-            const Texture* lightIcon  = resourceManager->getTexture("textures/icons/lightbulb_icon.png", true).get();
+            const Texture* lightIcon = resourceManager->getTexture("textures/icons/lightbulb_icon.png", true).get();
             const Texture* cameraIcon = resourceManager->getTexture("textures/icons/camera_icon.png", true).get();
-            for (const Entity& entity : world.entities()) {
-                const auto* transform = entity.getComponent<TransformComponent>();
-                if (transform == nullptr) continue;
-
+            world.each<TransformComponent>([&](const EntityId id, const TransformComponent& transform) {
                 const Texture* icon = nullptr;
-                if (entity.getComponent<LightComponent>() != nullptr) {
+                if (world.get<LightComponent>(id) != nullptr) {
                     icon = lightIcon;
-                } else if (entity.getComponent<CameraComponent>() != nullptr && entity.getId() != activeCameraId) {
+                } else if (world.get<CameraComponent>(id) != nullptr && id != activeCameraId) {
                     icon = cameraIcon;
                 }
-                if (icon == nullptr) continue;
+                if (icon == nullptr) return;
                 // World-space so parented lights/cameras get their icon where they actually are.
-                icons.push_back({ glm::vec3(transform->worldMatrix()[3]), kEditorIconSize, icon, sampler });
-            }
+                icons.push_back({ glm::vec3(transform.worldMatrix()[3]), kEditorIconSize, icon, sampler });
+            });
             billboardRenderer->draw(renderPass, commandBuffer,
                 resourceManager->getPipeline(PipelineType::Billboard), view, projection, icons);
         }
@@ -908,20 +880,20 @@ namespace ytail {
         // Blit the scaled scene target up/down to the swapchain (linear filter). This is where
         // resolution scale takes effect; ImGui then draws on top at native swapchain resolution.
         SDL_GPUBlitInfo blit = {};
-        blit.source.texture      = sceneColorTexture;
-        blit.source.w            = static_cast<Uint32>(w);
-        blit.source.h            = static_cast<Uint32>(h);
+        blit.source.texture = sceneColorTexture;
+        blit.source.w = static_cast<Uint32>(w);
+        blit.source.h = static_cast<Uint32>(h);
         blit.destination.texture = swapchainTexture;
-        blit.destination.w       = swapchainW;
-        blit.destination.h       = swapchainH;
-        blit.load_op             = SDL_GPU_LOADOP_DONT_CARE;
-        blit.filter              = SDL_GPU_FILTER_LINEAR;
+        blit.destination.w = swapchainW;
+        blit.destination.h = swapchainH;
+        blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        blit.filter = SDL_GPU_FILTER_LINEAR;
         SDL_BlitGPUTexture(commandBuffer, &blit);
 
         // UI pass: composite ImGui on top of the blitted scene. Color-only (no depth target).
         SDL_GPUColorTargetInfo uiTargetInfo = { nullptr };
-        uiTargetInfo.texture  = swapchainTexture;
-        uiTargetInfo.load_op  = SDL_GPU_LOADOP_LOAD;
+        uiTargetInfo.texture = swapchainTexture;
+        uiTargetInfo.load_op = SDL_GPU_LOADOP_LOAD;
         uiTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
         SDL_GPURenderPass* uiPass = SDL_BeginGPURenderPass(commandBuffer, &uiTargetInfo, 1, nullptr);
         ImGui_ImplSDLGPU3_RenderDrawData(ImGui::GetDrawData(), commandBuffer, uiPass);
@@ -940,17 +912,14 @@ namespace ytail {
     }
 
     Entity* Engine::addEntity() {
-        SDL_assert(entityIterationDepth == 0 && "spawn during entity tick; defer to after the loop");
         return world.addEntity();
     }
 
     Entity* Engine::addEntityWithId(const EntityId id) {
-        SDL_assert(entityIterationDepth == 0 && "spawn during entity tick; defer to after the loop");
         return world.addEntityWithId(id);
     }
 
     void Engine::clearScene() {
-        SDL_assert(entityIterationDepth == 0 && "clear during entity tick; defer to after the loop");
         world.clear();
         activeCameraId = NULL_ENTITY;
     }
@@ -964,7 +933,6 @@ namespace ytail {
     }
 
     void Engine::removeEntity(const EntityId id) {
-        SDL_assert(entityIterationDepth == 0 && "destroy during entity tick; defer to after the loop");
         world.removeEntity(id);
         // If the camera was in the removed subtree, its id no longer resolves.
         if (world.getEntity(activeCameraId) == nullptr) activeCameraId = NULL_ENTITY;
@@ -982,7 +950,7 @@ namespace ytail {
         const Entity* activeCamera = world.getEntity(activeCameraId);
         if (activeCamera == nullptr) return false;
         auto* camTransform = activeCamera->getComponent<TransformComponent>();
-        auto* camComp  = activeCamera->getComponent<CameraComponent>();
+        auto* camComp = activeCamera->getComponent<CameraComponent>();
         if (camTransform == nullptr || camComp == nullptr) return false;
 
         int w, h;
@@ -1012,11 +980,11 @@ namespace ytail {
 
         // near/far in NDC: z=0 is near, z=1 is far (GLM_FORCE_DEPTH_ZERO_TO_ONE)
         glm::vec4 nearH = invViewProj * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
-        glm::vec4 farH  = invViewProj * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+        glm::vec4 farH = invViewProj * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
         const glm::vec3 nearPoint = glm::vec3(nearH) / nearH.w;
-        const glm::vec3 farPoint  = glm::vec3(farH)  / farH.w;
+        const glm::vec3 farPoint = glm::vec3(farH)  / farH.w;
 
-        // Near-plane point, already world-space via the same view matrix as the direction — unlike
+        // Near-plane point, already world-space via the same view matrix as the direction: unlike
         // the transform's local position, this stays correct for a parented camera.
         outOrigin = nearPoint;
         outDir = glm::normalize(farPoint - nearPoint);
@@ -1028,10 +996,10 @@ namespace ytail {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable docking for editor panels
-        io.ConfigDragClickToInputText = true;                     // click a drag widget to type a value
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; // Enable Gamepad Controls
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable; // Enable docking for editor panels
+        io.ConfigDragClickToInputText = true; // click a drag widget to type a value
 
         // Setup Dear ImGui style
         ImGui::StyleColorsDark();
@@ -1068,8 +1036,8 @@ namespace ytail {
         ImGui_ImplSDLGPU3_InitInfo init_info = {};
         init_info.Device = device;
         init_info.ColorTargetFormat = SDL_GetGPUSwapchainTextureFormat(device, window);
-        init_info.MSAASamples = SDL_GPU_SAMPLECOUNT_1;                      // Only used in multi-viewports mode.
-        init_info.SwapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR;  // Only used in multi-viewports mode.
+        init_info.MSAASamples = SDL_GPU_SAMPLECOUNT_1; // Only used in multi-viewports mode.
+        init_info.SwapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR; // Only used in multi-viewports mode.
         init_info.PresentMode = SDL_GPU_PRESENTMODE_VSYNC;
         ImGui_ImplSDLGPU3_Init(&init_info);
 

@@ -13,7 +13,7 @@
 
 #include "TransformComponent.h"
 #include "engine/Constants.h"
-#include "engine/Entity.h"
+#include "engine/World.h"
 #include "engine/serialize/Archive.h"
 #include "engine/Input.h"
 
@@ -28,27 +28,26 @@ namespace ytail
         ar("requireRightClick", requireRightClick);
     }
 
-    bool FreeMovementComponent::ensureTransform(){
-        if (transformComp == nullptr && owner != nullptr){
-            transformComp = owner->getComponent<TransformComponent>();
-        }
-        if (transformComp == nullptr) return false;
+    TransformComponent* FreeMovementComponent::ensureTransform(){
+        TransformComponent* transform = getSibling<TransformComponent>();
+        if (transform == nullptr) return nullptr;
 
         // Seed our yaw/pitch from the transform's starting rotation. Derive them from the forward
-        // vector, matching the qY(yaw)*qX(pitch) build in eventTick — NOT glm::eulerAngles, whose
+        // vector, matching the qY(yaw)*qX(pitch) build in eventTick, NOT glm::eulerAngles, whose
         // yaw is asin-limited to [-90,90] and folds larger yaws into pitch/roll (which snaps the
         // view on scene reload once you've turned past 90 degrees).
         if (!seeded){
-            const glm::vec3 fwd = glm::normalize(transformComp->getRotation() * constant::WorldForward);
+            const glm::vec3 fwd = glm::normalize(transform->getRotation() * constant::WorldForward);
             pitch = glm::degrees(std::asin(std::clamp(fwd.y, -1.0f, 1.0f)));
-            yaw   = glm::degrees(std::atan2(-fwd.x, -fwd.z));
+            yaw = glm::degrees(std::atan2(-fwd.x, -fwd.z));
             seeded = true;
         }
-        return true;
+        return transform;
     }
 
     void FreeMovementComponent::tick(float deltaTime){
-        if (!ensureTransform()) return;
+        TransformComponent* transformComp = ensureTransform();
+        if (transformComp == nullptr) return;
 
         // Always-on mode holds the mouse whenever we have focus. setMouseCaptured refuses while
         // the UI is active, so this yields to menus and re-grabs once they close.
@@ -82,7 +81,8 @@ namespace ytail
     }
 
     void FreeMovementComponent::eventTick(const SDL_Event& event){
-        if (!ensureTransform()) return;
+        TransformComponent* transformComp = ensureTransform();
+        if (transformComp == nullptr) return;
 
         switch (event.type) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:

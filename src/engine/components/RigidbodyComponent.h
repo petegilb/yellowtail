@@ -15,7 +15,16 @@ namespace ytail {
     // Ties the sibling transform to a Jolt body
     class RigidbodyComponent : public Component {
     public:
+        RigidbodyComponent() = default;
         ~RigidbodyComponent() override;
+
+        // Components get moved around inside their pool. The physics body handle must transfer
+        // on move so the old copy's destructor doesn't delete a live body; copying would leave
+        // two owners.
+        RigidbodyComponent(RigidbodyComponent&& other) noexcept;
+        RigidbodyComponent& operator=(RigidbodyComponent&& other) noexcept;
+        RigidbodyComponent(const RigidbodyComponent&) = delete;
+        RigidbodyComponent& operator=(const RigidbodyComponent&) = delete;
 
         void fixedTick(float deltaTime) override;
         void tick(float deltaTime) override;
@@ -35,9 +44,8 @@ namespace ytail {
 
     private:
         // create the body on the first tick, and rebuild it when an inspector edit marks it dirty
-        bool ensureBody();
+        bool ensureBody(const TransformComponent* transform);
 
-        TransformComponent* transformComp = nullptr;
         physics::BodyHandle body = physics::InvalidBody;
         bool bodyDirty = false;
     };

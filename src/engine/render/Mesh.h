@@ -19,9 +19,9 @@ namespace ytail {
     };
 
     struct Submesh {
-        std::uint32_t indexOffset;   // where this piece starts in the index buffer
-        std::uint32_t indexCount;    // how many indices this piece spans
-        std::uint32_t materialSlot;  // which material in RenderComponent::materials to use
+        std::uint32_t indexOffset; // where this piece starts in the index buffer
+        std::uint32_t indexCount; // how many indices this piece spans
+        std::uint32_t materialSlot; // which material in RenderComponent::materials to use
     };
 
     class Mesh {
@@ -53,9 +53,9 @@ namespace ytail {
         // (a freed mesh's allocation can be recycled, which would fool pointer-keyed caches).
         const Uint64 uid = ++uidCounter;
         SDL_GPUBuffer* vertexBuffer = nullptr;
-        SDL_GPUBuffer* indexBuffer  = nullptr;
+        SDL_GPUBuffer* indexBuffer = nullptr;
         // different pieces of the main mesh so we can have multiple materials per mesh
-        std::vector<Submesh> submeshes;   // the material-slot ranges from earlier
+        std::vector<Submesh> submeshes; // the material-slot ranges from earlier
         SDL_GPUIndexElementSize indexSize = SDL_GPU_INDEXELEMENTSIZE_32BIT;
 
         glm::vec3 aabbMin{0.0f};
