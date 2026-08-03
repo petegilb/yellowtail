@@ -88,6 +88,9 @@ namespace ytail {
         // pick the nearest mesh under a window pixel and select it (0 = nothing hit)
         void selectAtScreen(float screenX, float screenY);
 
+        // Move the fly camera to frame the current selection, keeping the view direction.
+        void focusSelected();
+
         // Filenames (not full paths) of every *.scene.json under assets/scenes, sorted.
         [[nodiscard]] std::vector<std::string> listSceneFiles() const;
 

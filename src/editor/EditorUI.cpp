@@ -79,14 +79,67 @@ namespace ytail
     }
 
     void EditorUI::handleKey(const SDL_KeyboardEvent& keyboard_event){
-        // Gizmo modes. disabled when flying
-        if (Input::get().isMouseCaptured() || ImGui::GetIO().WantTextInput) return;
+        // Never steal keys while typing in a panel.
+        if (ImGui::GetIO().WantTextInput) return;
+
+        // Frame the selection
+        if (keyboard_event.key == SDLK_F) {
+            focusSelected();
+            return;
+        }
+
+        // Gizmo modes, disabled while flying.
+        if (Input::get().isMouseCaptured()) return;
         switch (keyboard_event.key) {
             case SDLK_W: gizmoOperation = ImGuizmo::TRANSLATE; break;
             case SDLK_E: gizmoOperation = ImGuizmo::ROTATE; break;
             case SDLK_R: gizmoOperation = ImGuizmo::SCALE; break;
             default: ;
         }
+    }
+
+    void EditorUI::focusSelected(){
+        if (selectedEntity == 0) return;
+        Entity* target = engine->getEntity(selectedEntity);
+        if (target == nullptr) return;
+        auto* targetTransform = target->getComponent<TransformComponent>();
+        if (targetTransform == nullptr) return;
+
+        const glm::mat4& targetWorld = targetTransform->worldMatrix();
+        glm::vec3 focusCenter = glm::vec3(targetWorld[3]);
+        float focusRadius = 1.0f;
+
+        // Frame the mesh bounds when there is one, so large or off-origin meshes still fit.
+        if (auto* render = target->getComponent<RenderComponent>(); render != nullptr && render->mesh) {
+            const glm::vec3 localMin = render->mesh->aabbMin;
+            const glm::vec3 localMax = render->mesh->aabbMax;
+            glm::vec3 worldMin(FLT_MAX);
+            glm::vec3 worldMax(-FLT_MAX);
+            for (int corner = 0; corner < 8; ++corner) {
+                const glm::vec3 localCorner(
+                    corner & 1 ? localMax.x : localMin.x,
+                    corner & 2 ? localMax.y : localMin.y,
+                    corner & 4 ? localMax.z : localMin.z);
+                const glm::vec3 worldCorner = glm::vec3(targetWorld * glm::vec4(localCorner, 1.0f));
+                worldMin = glm::min(worldMin, worldCorner);
+                worldMax = glm::max(worldMax, worldCorner);
+            }
+            focusCenter = (worldMin + worldMax) * 0.5f;
+            focusRadius = glm::max(glm::length(worldMax - worldMin) * 0.5f, 0.01f);
+        }
+
+        Entity* camera = engine->getEntity(editor->getEditorCameraId());
+        if (camera == nullptr) return;
+        auto* cameraTransform = camera->getComponent<TransformComponent>();
+        auto* cameraLens = camera->getComponent<CameraComponent>();
+        if (cameraTransform == nullptr || cameraLens == nullptr) return;
+
+        // Keep the current view direction, just dolly back far enough to fit the bounds.
+        const glm::vec3 forward = cameraTransform->getRotation() * glm::vec3(0.0f, 0.0f, -1.0f);
+        const float halfFovY = glm::radians(cameraLens->fovYDegrees) * 0.5f;
+        const float distance = focusRadius / glm::max(glm::sin(halfFovY), 0.01f) * 1.25f;
+
+        cameraTransform->setPosition(focusCenter - forward * distance);
     }
 
     void EditorUI::selectAtScreen(float screenX, float screenY){
