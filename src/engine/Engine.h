@@ -113,6 +113,11 @@ namespace ytail {
 
         void setActiveCamera(EntityId id);
 
+        // The entity input drives (a camera or pawn). Forwards to the world; input-driven
+        // components act only when their owner is possessed.
+        void possess(EntityId id) { world.possess(id); }
+        [[nodiscard]] EntityId getPossessed() const { return world.getPossessed(); }
+
         // View + projection matrices for the active camera. False if there's no active camera.
         [[nodiscard]] bool getCameraMatrices(glm::mat4& outView, glm::mat4& outProjection) const;
 

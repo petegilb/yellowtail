@@ -145,6 +145,7 @@ namespace ytail {
         dense.clear();
         slots.assign(1, {}); // slot 0 stays reserved
         freeIndices.clear();
+        possessedEntity = NULL_ENTITY;
         // Queued commands point at the old scene's entities. The new scene reuses the same ids
         // (generations reset here), so running them later could hit the wrong entity.
         pendingCommands.clear();

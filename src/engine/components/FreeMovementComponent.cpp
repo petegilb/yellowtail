@@ -46,6 +46,9 @@ namespace ytail
     }
 
     void FreeMovementComponent::tick(float deltaTime){
+        // Only the possessed entity flies, so multiple cameras don't fight over the mouse.
+        if (world == nullptr || getOwnerId() != world->getPossessed()) return;
+
         TransformComponent* transformComp = ensureTransform();
         if (transformComp == nullptr) return;
 
@@ -81,6 +84,8 @@ namespace ytail
     }
 
     void FreeMovementComponent::eventTick(const SDL_Event& event){
+        if (world == nullptr || getOwnerId() != world->getPossessed()) return;
+
         TransformComponent* transformComp = ensureTransform();
         if (transformComp == nullptr) return;
 

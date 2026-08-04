@@ -73,6 +73,8 @@ namespace ytail
 
         editorCameraId = camera->getId();
         engine->setActiveCamera(editorCameraId);
+        // The editor always drives its own fly cam, never the scene's cameras.
+        engine->possess(editorCameraId);
     }
 
     bool Editor::captureCameraPose(glm::vec3& outPosition, glm::quat& outRotation) const {

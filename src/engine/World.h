@@ -39,6 +39,10 @@ namespace ytail {
         // to root. Returns false (no-op) on unknown ids, self-parenting, or a cycle.
         bool reparent(EntityId childId, EntityId parentId);
 
+        // The entity currently receiving input (a camera or pawn)
+        void possess(EntityId id) { possessedEntity = id; }
+        [[nodiscard]] EntityId getPossessed() const { return possessedEntity; }
+
         // Every live entity, packed for iteration. Order changes when entities are removed.
         [[nodiscard]] std::vector<Entity>& entities() { return dense; }
         [[nodiscard]] const std::vector<Entity>& entities() const { return dense; }
@@ -119,6 +123,9 @@ namespace ytail {
         std::vector<Entity> dense;
         std::vector<Slot> slots;
         std::vector<Uint32> freeIndices;
+
+        // Entity that input-driven components respond to (see possess()).
+        EntityId possessedEntity = NULL_ENTITY;
 
         // indexed by componentTypeId
         std::vector<std::unique_ptr<IComponentPool>> pools;
