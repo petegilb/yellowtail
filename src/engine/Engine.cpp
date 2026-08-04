@@ -506,23 +506,34 @@ namespace ytail {
         ZoneScoped;
         drawCallsLastFrame = 0;
 
+        // uiTick() already opened an ImGui frame this iteration. Any early return here skips
+        // renderImGui() (which closes it via ImGui::Render), so close it directly or the next
+        // frame's NewFrame asserts.
+
         // just found this reference: https://dawaralvi.github.io/sdl-gpu/
         // get the active camera
         const Entity* activeCamera = world.getEntity(activeCameraId);
         if (activeCamera == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Render camera is null!");
+            ImGui::EndFrame();
             return -1;
         }
         auto* camXform = activeCamera->getComponent<TransformComponent>();
         glm::mat4 view, projection;
-        if (!getCameraMatrices(view, projection)) return -1;
+        if (!getCameraMatrices(view, projection)) {
+            ImGui::EndFrame();
+            return -1;
+        }
 
         // Scene targets are sized in real pixels * resolutionScale; the projection's aspect comes
         // from the logical size in getCameraMatrices, so it needs no adjustment.
         int w, h;
         getRenderTargetSize(w, h);
         // minimized (clamped to 1): skip the frame
-        if (h <= 1) return 0;
+        if (h <= 1) {
+            ImGui::EndFrame();
+            return 0;
+        }
         ensureSceneColorTexture(w, h);
         ensureDepthTexture(w, h);
 
@@ -531,6 +542,7 @@ namespace ytail {
         SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(device);
         if (commandBuffer == nullptr){
             SDL_Log("AcquireGPUCommandBuffer failed: %s", SDL_GetError());
+            ImGui::EndFrame();
             return -1;
         }
 

@@ -85,6 +85,29 @@ function(yt_copy_engine_assets target)
             COMMENT "Copying engine shaders next to ${target}")
 endfunction()
 
+# Copy the engine's editor icons (light/camera gizmo sprites, app icon) next to an executable.
+# An editor build calls this on top of yt_copy_engine_assets.
+function(yt_copy_editor_assets target)
+    add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${YELLOWTAIL_ASSETS_DIR}/textures/icons"
+                    "$<TARGET_FILE_DIR:${target}>/assets/textures/icons"
+            COMMENT "Copying engine editor icons next to ${target}")
+endfunction()
+
+# --- Editor library (reusable; the Editor application + its ImGui panels) ---
+# A static lib so a game consuming yellowtail can build its own editor executable that knows
+# about the game's components. main.cpp stays out of the lib; each executable supplies its own.
+file(GLOB_RECURSE EDITOR_LIB_SOURCES CONFIGURE_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.c)
+list(FILTER EDITOR_LIB_SOURCES EXCLUDE REGEX "/main\\.cpp$")
+file(GLOB_RECURSE EDITOR_LIB_HEADERS CONFIGURE_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.h)
+add_library(editor STATIC ${EDITOR_LIB_SOURCES} ${EDITOR_LIB_HEADERS}
+        ${PROJECT_SOURCE_DIR}/external/imguizmo/ImGuizmo.cpp)
+target_link_libraries(editor PUBLIC engine)
+
 # The sample game and the editor only build when yellowtail is the project being built.
 # Consumed as a submodule these are skipped: a game only wants the `engine` library, not
 # yellowtail's own executables (and their asset/DLL copy steps) in its build.
@@ -100,13 +123,8 @@ if(PROJECT_IS_TOP_LEVEL)
     yt_configure_app(ytail_game)
 
     # --- Editor executable ---
-    file(GLOB_RECURSE EDITOR_SOURCES CONFIGURE_DEPENDS
-            ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.c)
-    file(GLOB_RECURSE EDITOR_HEADERS CONFIGURE_DEPENDS
-            ${CMAKE_CURRENT_SOURCE_DIR}/editor/*.h)
-    add_executable(ytail_editor ${EDITOR_SOURCES} ${EDITOR_HEADERS}
-            ${PROJECT_SOURCE_DIR}/external/imguizmo/ImGuizmo.cpp)
-    target_link_libraries(ytail_editor PRIVATE engine)
+    # Entry point only; the editor itself lives in the `editor` library above.
+    add_executable(ytail_editor ${CMAKE_CURRENT_SOURCE_DIR}/editor/main.cpp)
+    target_link_libraries(ytail_editor PRIVATE editor)
     yt_configure_app(ytail_editor)
 endif()

@@ -128,6 +128,9 @@ namespace ytail {
 
         // Builds components by serial id when loading a scene.
         [[nodiscard]] const ComponentRegistry& getComponentRegistry() const { return componentRegistry; }
+        // Non-const so a game can register its own component types after construction
+        // (the engine registers its built-ins in the constructor first).
+        [[nodiscard]] ComponentRegistry& getComponentRegistry() { return componentRegistry; }
 
         bool showPhysicsShapes = false;
 
