@@ -36,7 +36,10 @@ public:
         // get or load the mesh at the specified path
         std::shared_ptr<Mesh> getMesh(const std::string& path);
         // get or load the material from a .mat file. Loads its textures (file or solid color) and samplers.
+        // "primitive:default" returns the built-in lit gray material below.
         std::shared_ptr<Material> getMaterial(const std::string& path);
+        // A plain lit gray material with no asset file, for primitives and quick prototyping.
+        std::shared_ptr<Material> getDefaultMaterial();
         // Drop the cached material and reload it from disk.
         std::shared_ptr<Material> reloadMaterial(const std::string& path);
         // get the pipeline based on the pipeline type. When outline is true, lit pipelines are
@@ -92,6 +95,12 @@ public:
             Uint32 storageBufferCount,
             Uint32 storageTextureCount
         );
+
+        // Create the GPU buffers for a mesh, upload the geometry, and build the Mesh 
+        std::shared_ptr<Mesh> uploadMesh(const std::string& name, const std::vector<Vertex>& vertices,
+                                         const std::vector<Uint32>& indices, std::vector<Submesh> submeshes);
+        // Build and cache a "primitive:<shape>" mesh (cube/sphere/plane).
+        std::shared_ptr<Mesh> loadPrimitiveMesh(const std::string& path);
 
         void initializePipelines();
         void initializeSamplers();

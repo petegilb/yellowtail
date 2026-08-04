@@ -9,6 +9,7 @@
 #include <cgltf.h>
 
 #include "../render/JoltDebugVertex.h"
+#include "../render/MeshPrimitives.h"
 #include "../serialize/EnumJson.h"
 
 namespace ytail {
@@ -190,6 +191,8 @@ namespace ytail {
     std::shared_ptr<Mesh> ResourceManager::getMesh(const std::string &path) {
         if (meshes.contains(path)) return meshes[path];
 
+        if (path.rfind("primitive:", 0) == 0) return loadPrimitiveMesh(path);
+
         SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "Loading mesh from: %s", path.c_str());
 
         // load mesh from disk (path is assets-relative, e.g. "models/cube.gltf")
@@ -282,12 +285,19 @@ namespace ytail {
             }
         }
 
-        // upload the vertices and indices to the GPU
-        // inspired by TexturedQuad.c in the SDL_GPU examples.
+        std::shared_ptr<Mesh> mesh = uploadMesh(name, vertices, indices, std::move(submeshes));
+        mesh->sourcePath = path;
+        meshes[path] = mesh;
+        cgltf_free(data);
+        return mesh;
+    }
 
-        // create the GPU Buffers based on the sizes of each array
+    std::shared_ptr<Mesh> ResourceManager::uploadMesh(const std::string& name,
+            const std::vector<Vertex>& vertices, const std::vector<Uint32>& indices,
+            std::vector<Submesh> submeshes) {
+        // inspired by TexturedQuad.c in the SDL_GPU examples.
         const auto vertexBytes = static_cast<Uint32>(vertices.size() * sizeof(Vertex));
-        const auto indexBytes = static_cast<Uint32>(indices.size()  * sizeof(Uint32));
+        const auto indexBytes = static_cast<Uint32>(indices.size() * sizeof(Uint32));
 
         SDL_GPUBufferCreateInfo vbInfo = {};
         vbInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
@@ -299,19 +309,17 @@ namespace ytail {
         ibInfo.size = indexBytes;
         SDL_GPUBuffer* indexBuffer = SDL_CreateGPUBuffer(device, &ibInfo);
 
-        // create the transfer buffer that we can use for both
+        // one transfer buffer holds the vertices then the indices back to back
         SDL_GPUTransferBufferCreateInfo tbInfo = {};
         tbInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
         tbInfo.size = vertexBytes + indexBytes;
         SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(device, &tbInfo);
 
-        // copy over the data from our vertices and indices into the transfer buffer (on the CPU side)
         void* mapped = SDL_MapGPUTransferBuffer(device, transferBuffer, false);
         SDL_memcpy(mapped, vertices.data(), vertexBytes);
         SDL_memcpy(static_cast<Uint8*>(mapped) + vertexBytes, indices.data(), indexBytes);
         SDL_UnmapGPUTransferBuffer(device, transferBuffer);
 
-        // copy over to the GPU
         SDL_GPUCommandBuffer* uploadCmd = SDL_AcquireGPUCommandBuffer(device);
         SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(uploadCmd);
 
@@ -325,13 +333,9 @@ namespace ytail {
 
         SDL_EndGPUCopyPass(copyPass);
         SDL_SubmitGPUCommandBuffer(uploadCmd);
-
-        // Release the transfer buffer
         SDL_ReleaseGPUTransferBuffer(device, transferBuffer);
 
-        // create mesh object and make sure we can store everything properly
-        std::shared_ptr<Mesh> mesh = std::make_shared<Mesh>(device, name, vertexBuffer, indexBuffer, submeshes);
-        mesh->sourcePath = path;
+        auto mesh = std::make_shared<Mesh>(device, name, vertexBuffer, indexBuffer, std::move(submeshes));
 
         // local-space bounds over all vertices (for an aabb)
         if (!vertices.empty()) {
@@ -344,14 +348,49 @@ namespace ytail {
             mesh->aabbMin = aabbMin;
             mesh->aabbMax = aabbMax;
         }
-
-        meshes[path] = mesh;
-        cgltf_free(data);
         return mesh;
+    }
+
+    std::shared_ptr<Mesh> ResourceManager::loadPrimitiveMesh(const std::string& path) {
+        const std::string shape = path.substr(std::string("primitive:").size());
+        primitives::MeshData data;
+        if (shape == "cube") data = primitives::makeCube();
+        else if (shape == "sphere") data = primitives::makeSphere();
+        else if (shape == "plane") data = primitives::makePlane();
+        else if (shape == "cylinder") data = primitives::makeCylinder();
+        else if (shape == "capsule") data = primitives::makeCapsule();
+        else {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Unknown primitive '%s'", path.c_str());
+            return nullptr;
+        }
+
+        std::vector<Submesh> submeshes{ { 0u, static_cast<Uint32>(data.indices.size()), 0u } };
+        std::shared_ptr<Mesh> mesh = uploadMesh(path, data.vertices, data.indices, std::move(submeshes));
+        mesh->sourcePath = path;
+        meshes[path] = mesh;
+        return mesh;
+    }
+
+    std::shared_ptr<Material> ResourceManager::getDefaultMaterial() {
+        const std::string key = "primitive:default";
+        if (materials.contains(key)) return materials[key];
+
+        auto material = std::make_shared<Material>();
+        material->sourcePath = key;
+        material->pipelineType = PipelineType::LitStatic;
+        SDL_GPUSampler* sampler = getSampler(SamplerType::LinearWrap);
+        // The lit shader samples diffuse at t0 and specular at t1; solid textures need no files.
+        material->textures.push_back({ getSolidTexture(200, 200, 200), sampler, SamplerType::LinearWrap });
+        material->textures.push_back({ getSolidTexture(30, 30, 30), sampler, SamplerType::LinearWrap });
+        material->setUniform(MaterialUniform{});
+        materials[key] = material;
+        return material;
     }
 
     std::shared_ptr<Material> ResourceManager::getMaterial(const std::string& path) {
         if (materials.contains(path)) return materials[path];
+
+        if (path == "primitive:default") return getDefaultMaterial();
 
         // Read the .mat file (e.g. "materials/crate.mat").
         std::ifstream file(resolveAssetPath(path));

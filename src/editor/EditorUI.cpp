@@ -303,8 +303,8 @@ namespace ytail
         }
         if (removeSlot >= 0) render->materials.erase(render->materials.begin() + removeSlot);
         if (ImGui::SmallButton("Add Material Slot")) {
-            // Default new slots to sphere.mat rather than an empty slot.
-            render->materials.push_back(resources->getMaterial("materials/sphere.mat"));
+            // Default new slots to the built-in material rather than an empty slot.
+            render->materials.push_back(resources->getDefaultMaterial());
         }
     }
 
@@ -817,11 +817,11 @@ namespace ytail
 
                     if (ImGui::MenuItem(info.displayName.c_str())) {
                         Component* component = info.emplace(world, selectedEntity);
-                        // A fresh RenderComponent defaults to the sphere mesh + material.
+                        // A fresh RenderComponent defaults to the built-in sphere + material
                         if (auto* render = dynamic_cast<RenderComponent*>(component)) {
                             ResourceManager* resources = engine->getResourceManager();
-                            render->setMesh(resources->getMesh("models/sphere.glb"));
-                            render->addMaterial(resources->getMaterial("materials/sphere.mat"));
+                            render->setMesh(resources->getMesh("primitive:sphere"));
+                            render->addMaterial(resources->getDefaultMaterial());
                         }
                     }
                 }
