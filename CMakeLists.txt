@@ -95,14 +95,6 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
 
-# --- enet (zpl-c fork) ---
-FetchContent_Declare(enet
-        GIT_REPOSITORY https://github.com/zpl-c/enet.git
-        GIT_TAG v2.6.5
-        GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(enet)
-
 # --- Clay (immediate-mode UI layout - single-header lib + SDL3 renderer .c file) ---
 # Clay ships a CMakeLists.txt that ONLY builds examples, no consumer library target.
 # We disable all the example switches, fetch the source, and pull clay.h + the SDL3

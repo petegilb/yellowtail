@@ -23,7 +23,6 @@ target_link_libraries(engine PUBLIC
         SDL3_ttf::SDL3_ttf-static
         SDL3_shadercross::SDL3_shadercross-static
         imgui
-        enet::enet_static
         Jolt
         glm::glm
         nlohmann_json::nlohmann_json
