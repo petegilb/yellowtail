@@ -108,6 +108,11 @@ add_library(editor STATIC ${EDITOR_LIB_SOURCES} ${EDITOR_LIB_HEADERS}
         ${PROJECT_SOURCE_DIR}/external/imguizmo/ImGuizmo.cpp)
 target_link_libraries(editor PUBLIC engine)
 
+# Bake in the top-level project's source assets dir so the editor can also write saved scenes
+# back into the git tree, not just the exe-relative copy. CMAKE_SOURCE_DIR is the project being
+# built (yellowtail standalone, or the game that consumes it as a submodule).
+target_compile_definitions(editor PRIVATE YT_EDITOR_SOURCE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets/")
+
 # The sample game and the editor only build when yellowtail is the project being built.
 # Consumed as a submodule these are skipped: a game only wants the `engine` library, not
 # yellowtail's own executables (and their asset/DLL copy steps) in its build.

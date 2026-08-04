@@ -4,6 +4,8 @@
 
 #include "Editor.h"
 
+#include <fstream>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
@@ -18,6 +20,23 @@
 
 namespace ytail
 {
+    // Also write the scene into the project's source assets tree (when that path was baked in at
+    // build time), so editor saves land in the git repo, not only the exe-relative build copy.
+    static void mirrorSceneToSource(Engine& engine, const std::string& path) {
+#ifdef YT_EDITOR_SOURCE_ASSETS_DIR
+        const std::string full = std::string(YT_EDITOR_SOURCE_ASSETS_DIR) + path;
+        std::ofstream file(full);
+        if (file.is_open()) {
+            file << saveSceneToJson(engine).dump(2);
+        } else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Could not write scene to source tree: %s", full.c_str());
+        }
+#else
+        (void)engine;
+        (void)path;
+#endif
+    }
+
     // Engine null-check + assert live in the Application base constructor.
     Editor::Editor(Engine* inEngine) : Application(inEngine), ui(this) {
     }
@@ -89,11 +108,15 @@ namespace ytail
     }
 
     void Editor::saveCurrentScene(){
-        if (saveScene(*engine, currentScenePath)) lastSaveTick = SDL_GetTicks();
+        if (saveScene(*engine, currentScenePath)) {
+            mirrorSceneToSource(*engine, currentScenePath);
+            lastSaveTick = SDL_GetTicks();
+        }
     }
 
     bool Editor::saveSceneAs(const std::string& path){
         if (!saveScene(*engine, path)) return false;
+        mirrorSceneToSource(*engine, path);
         currentScenePath = path;
         lastSaveTick = SDL_GetTicks();
         return true;
