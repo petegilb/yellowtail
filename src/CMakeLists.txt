@@ -7,6 +7,15 @@ file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
 file(GLOB_RECURSE ENGINE_HEADERS CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/engine/*.h)
 
+# engine/net needs a SteamNetworkingSockets-compatible header set that only a consumer supplies. Off
+# by default so the public standalone build compiles with no networking headers; a game that consumes
+# the engine turns this on and adds the header dir to the engine target.
+option(YELLOWTAIL_WITH_NETWORKING "Build engine networking (engine/net)" OFF)
+if(NOT YELLOWTAIL_WITH_NETWORKING)
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/net/")
+    list(FILTER ENGINE_HEADERS EXCLUDE REGEX "/net/")
+endif()
+
 add_library(engine STATIC ${ENGINE_SOURCES} ${ENGINE_HEADERS})
 
 # PUBLIC so linking `engine` inherits these. PROJECT_SOURCE_DIR (not CMAKE_SOURCE_DIR) so the
