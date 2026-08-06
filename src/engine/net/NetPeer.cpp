@@ -201,13 +201,27 @@ namespace ytail {
         ImGui::Text("Mode: %s", hosting ? "Host" : "Client");
         ImGui::Text("Connections: %d", static_cast<int>(connections.size()));
         for (const uint32_t connection : connections) {
-            SteamNetConnectionRealTimeStatus_t status;
-            if (sockets->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) == k_EResultOK) {
-                ImGui::BulletText("#%u  ping %dms  quality %.0f%%", connection, status.m_nPing,
-                                  status.m_flConnectionQualityLocal * 100.0f);
-            } else {
-                ImGui::BulletText("#%u  connecting...", connection);
+            char identity[128] = "?";
+            char address[64] = "?";
+            SteamNetConnectionInfo_t info;
+            if (sockets->GetConnectionInfo(connection, &info)) {
+                info.m_identityRemote.ToString(identity, sizeof(identity));
+                info.m_addrRemote.ToString(address, sizeof(address), true);
             }
+            ImGui::BulletText("%s  (%s)", identity, address);
+
+            ImGui::Indent();
+            SteamNetConnectionRealTimeStatus_t status;
+            if (sockets->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) != k_EResultOK) {
+                ImGui::Text("connecting...  [#%u]", connection);
+            } else if (status.m_flConnectionQualityLocal < 0.0f) {
+                // -1 means Steam has no packet-loss data yet (idle / freshly connected).
+                ImGui::Text("ping %dms  quality n/a  [#%u]", status.m_nPing, connection);
+            } else {
+                ImGui::Text("ping %dms  quality %.0f%%  [#%u]", status.m_nPing,
+                            status.m_flConnectionQualityLocal * 100.0f, connection);
+            }
+            ImGui::Unindent();
         }
     }
 
