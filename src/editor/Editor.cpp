@@ -42,7 +42,9 @@ namespace ytail
     }
 
     Editor::~Editor(){
+        // Kill the local-test instances we spawned so closing the editor closes them too.
         for (SDL_Process* process : spawnedProcesses) {
+            SDL_KillProcess(process, true);
             SDL_DestroyProcess(process);
         }
         SDL_Log("Editor destroyed!");
