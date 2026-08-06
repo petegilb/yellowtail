@@ -88,6 +88,58 @@ namespace ytail {
         return true;
     }
 
+    bool NetPeer::startHostIP(const uint16_t port) {
+        if (sockets == nullptr) return false;
+
+        pollGroup = sockets->CreatePollGroup();
+
+        SteamNetworkingIPAddr address;
+        address.Clear();
+        address.SetIPv4(0, port);
+
+        // Loopback / LAN peers have no Steam cert, so allow unauthenticated IP connections.
+        SteamNetworkingConfigValue_t allowWithoutAuth;
+        allowWithoutAuth.SetInt32(k_ESteamNetworkingConfig_IP_AllowWithoutAuth, 1);
+
+        listenSocket = sockets->CreateListenSocketIP(address, 1, &allowWithoutAuth);
+        if (listenSocket == k_HSteamListenSocket_Invalid) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Failed to create an IP listen socket on port %u.", port);
+            return false;
+        }
+
+        hosting = true;
+        active = true;
+        SDL_Log("Hosting a local listen server on port %u.", port);
+        return true;
+    }
+
+    bool NetPeer::connectToIP(const uint16_t port) {
+        if (sockets == nullptr) return false;
+
+        pollGroup = sockets->CreatePollGroup();
+
+        SteamNetworkingIPAddr address;
+        address.Clear();
+        address.SetIPv4(0x7f000001, port); // 127.0.0.1
+
+        SteamNetworkingConfigValue_t allowWithoutAuth;
+        allowWithoutAuth.SetInt32(k_ESteamNetworkingConfig_IP_AllowWithoutAuth, 1);
+
+        const HSteamNetConnection connection = sockets->ConnectByIPAddress(address, 1, &allowWithoutAuth);
+        if (connection == k_HSteamNetConnection_Invalid) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "ConnectByIPAddress to 127.0.0.1:%u failed.", port);
+            return false;
+        }
+        sockets->SetConnectionPollGroup(connection, pollGroup);
+        connections.push_back(connection);
+
+        hosting = false;
+        active = true;
+        SDL_Log("Connecting to local host 127.0.0.1:%u.", port);
+        return true;
+    }
+
     void NetPeer::onStatusChanged(const uint32_t connection, const NetConnState state,
                                   const bool inboundFromListen, const char* endDebug) {
         switch (state) {

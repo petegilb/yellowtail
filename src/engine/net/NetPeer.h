@@ -32,6 +32,10 @@ namespace ytail {
         // Connect to a host by its SteamID (raw 64-bit). False on immediate failure.
         bool connectTo(uint64_t hostSteamId);
 
+        // Direct-IP variants for local testing (loopback / LAN): no relay, no second Steam account.
+        bool startHostIP(uint16_t port);
+        bool connectToIP(uint16_t port);
+
         // Receive and dispatch pending messages. Call once per frame after backend callbacks run.
         void poll();
 

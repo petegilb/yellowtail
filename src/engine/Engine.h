@@ -87,6 +87,10 @@ namespace ytail {
         void setWindowMode(WindowMode mode);
         void setResolution(int width, int height);
         void setTargetDisplay(SDL_DisplayID display);
+        // Move the OS window. Used to offset multiple local-test instances so they don't stack.
+        void setWindowPosition(int windowX, int windowY) {
+            if (window != nullptr) SDL_SetWindowPosition(window, windowX, windowY);
+        }
         // Unique resolutions supported by the given display (0 == the window's current display).
         [[nodiscard]] std::vector<glm::ivec2> getAvailableResolutions(SDL_DisplayID display) const;
 

@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <SDL3/SDL.h>
 #include <glm/fwd.hpp>
@@ -51,6 +52,13 @@ namespace ytail
         void play();
         void stop();
 
+        // --- Local multiplayer test launcher ---
+        // Path to the game executable, set by the game's editor entry point. Empty disables it.
+        void setGameExecutable(const std::string& path) { gameExecutable = path; }
+        [[nodiscard]] bool canLaunchMultiplayer() const { return !gameExecutable.empty(); }
+        // Spawn instanceCount local game processes: instance 0 hosts, the rest connect to it.
+        void launchLocalMultiplayer(int instanceCount);
+
     protected:
         void handleInput(const SDL_KeyboardEvent& keyboard_event);
 
@@ -69,6 +77,10 @@ namespace ytail
         std::string currentScenePath = "scenes/main.scene.json";
         // When the scene was last saved (SDL ticks, ms); 0 until the first save.
         Uint64 lastSaveTick = 0;
+
+        // Local multiplayer test launcher: the game exe to spawn + handles to the spawned processes.
+        std::string gameExecutable;
+        std::vector<SDL_Process*> spawnedProcesses;
 
         EditorUI ui;
     };

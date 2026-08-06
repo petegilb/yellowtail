@@ -839,6 +839,28 @@ namespace ytail
         }
     }
 
+    void EditorUI::drawMultiplayerTest() {
+        if (!ImGui::Begin("Multiplayer Test")) {
+            ImGui::End();
+            return;
+        }
+
+        if (!editor->canLaunchMultiplayer()) {
+            ImGui::TextWrapped("No game executable set for this build.");
+            ImGui::End();
+            return;
+        }
+
+        ImGui::TextWrapped("Launch local instances that connect over 127.0.0.1. "
+                           "Instance 0 hosts, the rest join.");
+        ImGui::SliderInt("Instances", &multiplayerInstanceCount, 2, 8);
+        if (ImGui::Button("Launch")) {
+            editor->launchLocalMultiplayer(multiplayerInstanceCount);
+        }
+
+        ImGui::End();
+    }
+
     void EditorUI::draw(){
         drawMenuBar();
 
@@ -875,6 +897,7 @@ namespace ytail
 
         drawMaterialEditor();
         drawSaveAsDialog();
+        drawMultiplayerTest();
         drawGizmo();
     }
 } // ytail

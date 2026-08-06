@@ -66,6 +66,7 @@ namespace ytail {
         void drawOutliner();
         void drawInspector();
         void drawSaveAsDialog();
+        void drawMultiplayerTest();
 
         // one entity row in the outliner tree, recursing into its children. Takes an id: actions
         // inside (Duplicate) can move entities in memory, so no Entity* survives the call.
@@ -119,6 +120,9 @@ namespace ytail {
         // Save As modal state: request flag (open next frame) + the typed filename.
         bool openSaveAsRequested = false;
         std::string saveAsName;
+
+        // Local multiplayer test launcher: number of instances to spawn.
+        int multiplayerInstanceCount = 2;
     };
 } // ytail
 

@@ -42,7 +42,33 @@ namespace ytail
     }
 
     Editor::~Editor(){
+        for (SDL_Process* process : spawnedProcesses) {
+            SDL_DestroyProcess(process);
+        }
         SDL_Log("Editor destroyed!");
+    }
+
+    void Editor::launchLocalMultiplayer(int instanceCount) {
+        if (gameExecutable.empty() || instanceCount < 1) return;
+
+        for (int i = 0; i < instanceCount; ++i) {
+            const std::string indexArg = std::to_string(i);
+            // Instance 0 hosts on the local port; the rest connect to it.
+            const char* const args[] = {
+                gameExecutable.c_str(),
+                "local",
+                i == 0 ? "host" : "connect",
+                "--window-index", indexArg.c_str(),
+                nullptr
+            };
+            SDL_Process* process = SDL_CreateProcess(args, false);
+            if (process == nullptr) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to launch %s: %s",
+                             gameExecutable.c_str(), SDL_GetError());
+                continue;
+            }
+            spawnedProcesses.push_back(process);
+        }
     }
 
     void Editor::start(){
