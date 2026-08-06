@@ -12,6 +12,8 @@
 #include "steam/isteamnetworkingsockets.h"
 #include "steam/isteamnetworkingutils.h"
 
+#include "imgui.h"
+
 #include "engine/net/INetworkEventHandler.h"
 
 namespace ytail {
@@ -186,6 +188,27 @@ namespace ytail {
         if (sockets == nullptr) return;
         sockets->SendMessageToConnection(
             connection, data, size, k_nSteamNetworkingSend_Reliable, nullptr);
+    }
+
+    void NetPeer::drawDebugUI() {
+        if (!ImGui::CollapsingHeader("Multiplayer")) return;
+
+        if (!active) {
+            ImGui::TextUnformatted("Offline");
+            return;
+        }
+
+        ImGui::Text("Mode: %s", hosting ? "Host" : "Client");
+        ImGui::Text("Connections: %d", static_cast<int>(connections.size()));
+        for (const uint32_t connection : connections) {
+            SteamNetConnectionRealTimeStatus_t status;
+            if (sockets->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) == k_EResultOK) {
+                ImGui::BulletText("#%u  ping %dms  quality %.0f%%", connection, status.m_nPing,
+                                  status.m_flConnectionQualityLocal * 100.0f);
+            } else {
+                ImGui::BulletText("#%u  connecting...", connection);
+            }
+        }
     }
 
     void NetPeer::removeConnection(const uint32_t connection) {

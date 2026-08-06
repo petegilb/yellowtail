@@ -35,6 +35,9 @@ namespace ytail {
         // Build ImGui windows for the app (editor panels)
         virtual void uiTick() {}
 
+        // Add app-specific sections to the engine debug window (e.g. multiplayer status).
+        virtual void debugUI() {}
+
     protected:
         Engine* engine;
     };

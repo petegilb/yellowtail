@@ -47,6 +47,10 @@ namespace ytail {
         [[nodiscard]] bool isActive() const { return active; }
         [[nodiscard]] bool isHosting() const { return hosting; }
 
+        // Render a "Multiplayer" section (mode, connections, per-connection ping) into the current
+        // ImGui window. Call from the app's debug UI.
+        void drawDebugUI();
+
         // Invoked by the connection-status callback (see the trampoline in the .cpp). Public only so
         // that file-static callback can reach it; not part of the normal API.
         void onStatusChanged(uint32_t connection, NetConnState state, bool inboundFromListen,

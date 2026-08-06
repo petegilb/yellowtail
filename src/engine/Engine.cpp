@@ -918,7 +918,7 @@ namespace ytail {
     void Engine::handleInput(const SDL_KeyboardEvent &keyboard_event) {
         // Ignore global hotkeys while a text field owns the keyboard (e.g. renaming an entity).
         if (ImGui::GetIO().WantTextInput) return;
-        if (keyboard_event.key == SDLK_TAB) {
+        if (keyboard_event.key == SDLK_GRAVE) {
             showDebugWindow = !showDebugWindow;
         }
     }
@@ -1172,6 +1172,9 @@ namespace ytail {
                         pointShadowRenderer->getCasterDraws(),
                         pointShadowRenderer->getCulledCasters(),
                         pointShadowRenderer->getSlotsRegenerated());
+
+            // Let the app add its own sections to the debug window (e.g. multiplayer status).
+            if (app != nullptr) app->debugUI();
             ImGui::End();
         }
 
