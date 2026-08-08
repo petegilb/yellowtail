@@ -15,7 +15,7 @@
 #include "../render/JoltDebugVertex.h"
 
 namespace ytail::physics {
-    enum class BodyType : uint8_t { Static, Dynamic };
+    enum class BodyType : uint8_t { Static, Dynamic, Kinematic };
     enum class ColliderShape : uint8_t { Box, Sphere, Capsule };
 
     // Opaque handle to a Jolt body (its BodyID as a raw int, so callers never see Jolt).
@@ -53,6 +53,15 @@ namespace ytail::physics {
 
         void getBodyTransform(BodyHandle handle, glm::vec3& outPosition, glm::quat& outRotation) const;
         void setBodyTransform(BodyHandle handle, const glm::vec3& position, const glm::quat& rotation);
+
+        // changes motion type in place, keeping the body's velocity and BodyID
+        void setBodyMotionType(BodyHandle handle, BodyType type);
+        // moves a kinematic body toward a target so Jolt derives a velocity from it (setBodyTransform teleports)
+        void moveKinematic(BodyHandle handle, const glm::vec3& position, const glm::quat& rotation, float deltaTime);
+        [[nodiscard]] glm::vec3 getLinearVelocity(BodyHandle handle) const;
+        void setLinearVelocity(BodyHandle handle, const glm::vec3& velocity);
+        [[nodiscard]] glm::vec3 getAngularVelocity(BodyHandle handle) const;
+        void setAngularVelocity(BodyHandle handle, const glm::vec3& velocity);
 
         // generate debug wireframe so we can draw it in the renderer
         void debugDraw();

@@ -18,6 +18,9 @@
 #include "render/DebugDraw.h"
 #include "render/JoltDebugVertex.h"
 #include "serialize/ComponentRegistry.h"
+#if YELLOWTAIL_WITH_NETWORKING
+#include "net/ReplicationManager.h"
+#endif
 
 namespace ytail {
     class ResourceManager;
@@ -67,6 +70,10 @@ namespace ytail {
 
         // count of fixed steps run. The backbone for networking (tag state/inputs by tick).
         [[nodiscard]] Uint64 getTickNumber() const { return tickNumber; }
+
+#if YELLOWTAIL_WITH_NETWORKING
+        [[nodiscard]] ReplicationManager& getReplication() { return replication; }
+#endif
 
         // Create (or resize) the depth+stencil texture to match the given pixel size.
         void ensureDepthTexture(int width, int height);
@@ -235,6 +242,10 @@ namespace ytail {
         // world stuff
         glm::vec3 ambientLight{0.0f}; // currently set to ambientDebug
         World world;
+
+#if YELLOWTAIL_WITH_NETWORKING
+        ReplicationManager replication;
+#endif
 
         // The camera to render from this frame. Looked up through the world each use, so a
         // deleted camera becomes "no camera" instead of a dangling pointer. Must have a

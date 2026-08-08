@@ -35,6 +35,9 @@ namespace ytail {
     Engine::Engine() {
         GameplayStatics::engine = this;
         componentRegistry.registerBuiltins();
+#if YELLOWTAIL_WITH_NETWORKING
+        replication.attach(this);
+#endif
 
         SDL_SetLogPriorities(logPriority);
 
@@ -220,6 +223,9 @@ namespace ytail {
 
     void Engine::fixedTick(float deltaTime) {
         ZoneScoped;
+#if YELLOWTAIL_WITH_NETWORKING
+        replication.applyReceived(tickNumber);
+#endif
         // engine (physics), then app, then components.
         {
             ZoneScopedN("Physics step");
@@ -245,9 +251,9 @@ namespace ytail {
         // plus any objects that they are holding/interacting with (if multiple interactors -- server)
         // physics bodies that are not being simulated can be kinematic so Jolt still calculates velocity
         // it seems like we can create different lanes for the snapshots and for other rpcs like playing fx
-        world.each<NetworkComponent>([&](const EntityId id, const auto& comp) {
-
-        });
+#if YELLOWTAIL_WITH_NETWORKING
+        replication.capture(tickNumber);
+#endif
 
         tickNumber++;
     }

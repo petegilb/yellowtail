@@ -51,8 +51,9 @@ namespace ytail {
 
 namespace ytail::physics {
     NLOHMANN_JSON_SERIALIZE_ENUM(BodyType, {
-        { BodyType::Static,  "Static" },
-        { BodyType::Dynamic, "Dynamic" },
+        { BodyType::Static,    "Static" },
+        { BodyType::Dynamic,   "Dynamic" },
+        { BodyType::Kinematic, "Kinematic" },
     })
 
     NLOHMANN_JSON_SERIALIZE_ENUM(ColliderShape, {

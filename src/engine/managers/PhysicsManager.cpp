@@ -135,6 +135,16 @@ namespace {
     glm::vec3 toGlm(RVec3Arg v)      { return { v.GetX(), v.GetY(), v.GetZ() }; }
     glm::quat toGlm(QuatArg q)       { return glm::quat(q.GetW(), q.GetX(), q.GetY(), q.GetZ()); }
 
+    EMotionType toJoltMotionType(ytail::physics::BodyType type) {
+        using namespace ytail::physics;
+        switch (type) {
+            case BodyType::Dynamic:   return EMotionType::Dynamic;
+            case BodyType::Kinematic: return EMotionType::Kinematic;
+            case BodyType::Static:
+            default:                  return EMotionType::Static;
+        }
+    }
+
     // The bare Jolt shape for one collider, before its local offset is applied.
     ShapeRefC makeShape(const ytail::physics::ColliderDef& c) {
         using namespace ytail::physics;
@@ -239,13 +249,19 @@ namespace ytail::physics {
             shape = result.Get();
         }
 
-        const bool dynamic = def.type == BodyType::Dynamic;
+        const bool movable = def.type != BodyType::Static;
         BodyCreationSettings settings(shape, toJolt(def.position), toJolt(def.rotation),
-            dynamic ? EMotionType::Dynamic : EMotionType::Static,
-            dynamic ? Layers::MOVING : Layers::NON_MOVING);
+            toJoltMotionType(def.type), movable ? Layers::MOVING : Layers::NON_MOVING);
+        // Static bodies get no MotionProperties by default, which makes setBodyMotionType assert.
+        settings.mAllowDynamicOrKinematic = true;
 
         const BodyID id = impl->physicsSystem.GetBodyInterface().CreateAndAddBody(
-            settings, dynamic ? EActivation::Activate : EActivation::DontActivate);
+            settings, movable ? EActivation::Activate : EActivation::DontActivate);
+        if (id.IsInvalid()) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                "[Jolt] createBody failed (body limit of %u reached?)", cMaxBodies);
+            return InvalidBody;
+        }
         return id.GetIndexAndSequenceNumber();
     }
 
@@ -258,6 +274,7 @@ namespace ytail::physics {
     }
 
     void PhysicsManager::getBodyTransform(BodyHandle handle, glm::vec3& outPosition, glm::quat& outRotation) const {
+        if (handle == InvalidBody) return;
         RVec3 position;
         Quat rotation;
         impl->physicsSystem.GetBodyInterface().GetPositionAndRotation(BodyID(handle), position, rotation);
@@ -266,8 +283,47 @@ namespace ytail::physics {
     }
 
     void PhysicsManager::setBodyTransform(BodyHandle handle, const glm::vec3& position, const glm::quat& rotation) {
+        if (handle == InvalidBody) return;
         impl->physicsSystem.GetBodyInterface().SetPositionAndRotation(
             BodyID(handle), toJolt(position), toJolt(rotation), EActivation::Activate);
+    }
+
+    void PhysicsManager::setBodyMotionType(BodyHandle handle, BodyType type) {
+        if (handle == InvalidBody) return;
+        BodyInterface& bodyInterface = impl->physicsSystem.GetBodyInterface();
+        const BodyID id(handle);
+        const bool movable = type != BodyType::Static;
+        bodyInterface.SetMotionType(id, toJoltMotionType(type),
+            movable ? EActivation::Activate : EActivation::DontActivate);
+        // NON_MOVING pairs never collide, so the layer has to follow the motion type.
+        bodyInterface.SetObjectLayer(id, movable ? Layers::MOVING : Layers::NON_MOVING);
+    }
+
+    void PhysicsManager::moveKinematic(BodyHandle handle, const glm::vec3& position,
+                                       const glm::quat& rotation, float deltaTime) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().MoveKinematic(
+            BodyID(handle), toJolt(position), toJolt(rotation), deltaTime);
+    }
+
+    glm::vec3 PhysicsManager::getLinearVelocity(BodyHandle handle) const {
+        if (handle == InvalidBody) return glm::vec3(0.0f);
+        return toGlm(impl->physicsSystem.GetBodyInterface().GetLinearVelocity(BodyID(handle)));
+    }
+
+    void PhysicsManager::setLinearVelocity(BodyHandle handle, const glm::vec3& velocity) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().SetLinearVelocity(BodyID(handle), toJolt(velocity));
+    }
+
+    glm::vec3 PhysicsManager::getAngularVelocity(BodyHandle handle) const {
+        if (handle == InvalidBody) return glm::vec3(0.0f);
+        return toGlm(impl->physicsSystem.GetBodyInterface().GetAngularVelocity(BodyID(handle)));
+    }
+
+    void PhysicsManager::setAngularVelocity(BodyHandle handle, const glm::vec3& velocity) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().SetAngularVelocity(BodyID(handle), toJolt(velocity));
     }
 
     void PhysicsManager::debugDraw() {

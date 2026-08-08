@@ -15,8 +15,13 @@ if(NOT YELLOWTAIL_WITH_NETWORKING)
     list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/net/")
     list(FILTER ENGINE_HEADERS EXCLUDE REGEX "/net/")
 endif()
+message(STATUS "yellowtail: networking ${YELLOWTAIL_WITH_NETWORKING}")
 
 add_library(engine STATIC ${ENGINE_SOURCES} ${ENGINE_HEADERS})
+
+if(YELLOWTAIL_WITH_NETWORKING)
+    target_compile_definitions(engine PUBLIC YELLOWTAIL_WITH_NETWORKING=1)
+endif()
 
 # PUBLIC so linking `engine` inherits these. PROJECT_SOURCE_DIR (not CMAKE_SOURCE_DIR) so the
 # paths stay pinned to yellowtail's tree when it's consumed as a submodule of another project.

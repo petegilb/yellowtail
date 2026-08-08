@@ -69,10 +69,10 @@ namespace ytail {
         TransformComponent* transform = getSibling<TransformComponent>();
         if (!ensureBody(transform)) return;
 
-        // Dynamic bodies are authoritative: write the simulated pose back onto the entity.
-        // The sim works in world space and this writes into the local position/rotation, so a
-        // dynamic body is expected to be a root entity. Parenting one is unsupported (sim wins).
-        if (type == BodyType::Dynamic) {
+        // Moving bodies are authoritative: write the simulated pose back onto the entity. The sim
+        // works in world space and this writes into the local position/rotation, so a moving body
+        // is expected to be a root entity. Parenting one is unsupported (sim wins).
+        if (type != BodyType::Static) {
             glm::vec3 pos; glm::quat rot;
             PhysicsManager::get().getBodyTransform(body, pos, rot);
             transform->setPosition(pos);
@@ -99,7 +99,7 @@ namespace ytail {
     }
 
     void RigidbodyComponent::drawInspector() {
-        const char* typeNames[] = { "Static", "Dynamic" };
+        const char* typeNames[] = { "Static", "Dynamic", "Kinematic" };
         const char* shapeNames[] = { "Box", "Sphere", "Capsule" };
 
         int typeIdx = static_cast<int>(type);
