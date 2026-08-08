@@ -17,6 +17,14 @@ namespace ytail {
 
     enum class NetConnState { Connecting, Connected, Closed };
 
+    // First byte of every payload, so a receiver can route without guessing. Never renumber these.
+    enum class NetMessageType : uint8_t {
+        Snapshot = 1,
+        Input = 2,
+        Event = 3,
+        Text = 4,
+    };
+
     // Connection layer over ISteamNetworkingSockets. One instance either hosts a listen server or
     // connects to one, and forwards connection and message events to an INetworkEventHandler. The
     // interface pointers come from the app via bind(), so the engine never calls the backend's global
@@ -42,7 +50,15 @@ namespace ytail {
         // Close all connections and release sockets.
         void shutdown();
 
+        // Reliable for events that can't be reconstructed from state; unreliable for snapshots.
         void sendReliable(uint32_t connection, const void* data, uint32_t size);
+        void sendUnreliable(uint32_t connection, const void* data, uint32_t size);
+        void broadcastReliable(const void* data, uint32_t size);
+        void broadcastUnreliable(const void* data, uint32_t size);
+        // Push out anything Nagle is still holding. Call after a tick's sends are queued.
+        void flush();
+
+        [[nodiscard]] const std::vector<uint32_t>& getConnections() const { return connections; }
 
         [[nodiscard]] bool isActive() const { return active; }
         [[nodiscard]] bool isHosting() const { return hosting; }
@@ -57,6 +73,7 @@ namespace ytail {
                              const char* endDebug);
 
     private:
+        void send(uint32_t connection, const void* data, uint32_t size, int sendFlags);
         void removeConnection(uint32_t connection);
 
         ISteamNetworkingSockets* sockets = nullptr;

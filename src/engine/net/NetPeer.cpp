@@ -172,21 +172,56 @@ namespace ytail {
     void NetPeer::poll() {
         if (!active) return;
 
-        SteamNetworkingMessage_t* messages[16];
-        const int received = sockets->ReceiveMessagesOnPollGroup(pollGroup, messages, 16);
-        for (int i = 0; i < received; ++i) {
-            SteamNetworkingMessage_t* message = messages[i];
-            if (handler != nullptr) {
-                handler->onMessage(message->m_conn, message->m_pData, message->m_cbSize);
+        // Drained, not capped: a hitch runs several fixed steps with no polling, and a partial
+        // drain leaves the backlog to compound over the following frames.
+        constexpr int MaxMessagesPerBatch = 32;
+        SteamNetworkingMessage_t* messages[MaxMessagesPerBatch];
+        int received = MaxMessagesPerBatch;
+        while (received == MaxMessagesPerBatch) {
+            received = sockets->ReceiveMessagesOnPollGroup(pollGroup, messages, MaxMessagesPerBatch);
+            for (int i = 0; i < received; ++i) {
+                SteamNetworkingMessage_t* message = messages[i];
+                if (handler != nullptr) {
+                    handler->onMessage(message->m_conn, message->m_pData, message->m_cbSize);
+                }
+                message->Release();
             }
-            message->Release();
+        }
+    }
+
+    void NetPeer::send(const uint32_t connection, const void* data, const uint32_t size, const int sendFlags) {
+        if (sockets == nullptr) return;
+        const EResult result =
+            sockets->SendMessageToConnection(connection, data, size, sendFlags, nullptr);
+        if (result != k_EResultOK) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Send to connection %u failed (%d bytes, result %d)",
+                        connection, size, static_cast<int>(result));
         }
     }
 
     void NetPeer::sendReliable(const uint32_t connection, const void* data, const uint32_t size) {
+        send(connection, data, size, k_nSteamNetworkingSend_Reliable);
+    }
+
+    void NetPeer::sendUnreliable(const uint32_t connection, const void* data, const uint32_t size) {
+        send(connection, data, size, k_nSteamNetworkingSend_Unreliable);
+    }
+
+    void NetPeer::broadcastUnreliable(const void* data, const uint32_t size) {
+        for (const uint32_t connection : connections) sendUnreliable(connection, data, size);
+    }
+
+    void NetPeer::broadcastReliable(const void* data, const uint32_t size) {
+        for (const uint32_t connection : connections) sendReliable(connection, data, size);
+    }
+
+    // Nagle holds a partly-filled packet briefly so following messages can share it. That grouping
+    // is worth having, but the last message of a tick has nothing to wait for, so flush once the
+    // tick's sends are queued.
+    void NetPeer::flush() {
         if (sockets == nullptr) return;
-        sockets->SendMessageToConnection(
-            connection, data, size, k_nSteamNetworkingSend_Reliable, nullptr);
+        for (const uint32_t connection : connections) sockets->FlushMessagesOnConnection(connection);
     }
 
     void NetPeer::drawDebugUI() {
