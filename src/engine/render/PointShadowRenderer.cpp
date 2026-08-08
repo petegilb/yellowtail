@@ -145,6 +145,11 @@ namespace ytail {
         // Cull casters per light and build each candidate's signature. Caster contributions are
         // summed (commutative), so an entity-map rehash that reorders iteration doesn't change the
         // signature and spuriously re-render every slot.
+        // TODO these cubes use uninterpolated poses, so a point light's shadow lags its mesh by up
+        // to one fixed step (the sun's shadow pass does interpolate). Feeding in
+        // GameplayStatics::renderWorldMatrix needs alpha folded into the signature too, since
+        // worldVersion does not change between fixed steps -- which costs a re-render per render
+        // frame instead of per fixed step for anything moving.
         for (Candidate& cand : candidates) {
             size_t sig = kFnvOffsetBasis;
             hashCombine(sig, cand.lightVersion); // light moved

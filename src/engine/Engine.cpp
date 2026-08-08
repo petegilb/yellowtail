@@ -217,7 +217,8 @@ namespace ytail {
         uiTick();
 
         // Fraction into the next fixed step, so render can interpolate between the last two sim states.
-        const float alpha = fixedAccumulator / FIXED_DT;
+        // Clamped because a paused engine never drains the accumulator.
+        const float alpha = std::clamp(fixedAccumulator / FIXED_DT, 0.0f, 1.0f);
         renderTick(alpha);
     }
 
@@ -645,7 +646,7 @@ namespace ytail {
             if (shadowPipeline) {
                 SDL_BindGPUGraphicsPipeline(shadowPass, shadowPipeline);
                 world.each<RenderComponent, TransformComponent>(
-                    [&](EntityId, const RenderComponent& renderComponent, const TransformComponent& transformComponent) {
+                    [&](const EntityId id, const RenderComponent& renderComponent, const TransformComponent&) {
                         if (!renderComponent.castsShadow) return;
                         const auto& mesh = renderComponent.mesh;
                         if (!mesh) return;
@@ -655,7 +656,7 @@ namespace ytail {
                         SDL_BindGPUVertexBuffers(shadowPass, 0, &vertexBinding, 1);
                         SDL_BindGPUIndexBuffer(shadowPass, &indexBinding, mesh->indexSize);
 
-                        const glm::mat4 lightMvp = lightViewProj * transformComponent.worldMatrix();
+                        const glm::mat4 lightMvp = lightViewProj * GameplayStatics::renderWorldMatrix(world, id, alpha);
                         SDL_PushGPUVertexUniformData(commandBuffer, 0, &lightMvp, sizeof(lightMvp));
 
                         for (const Submesh& submesh : mesh->submeshes) {
@@ -766,7 +767,7 @@ namespace ytail {
         // for each render component and transform component, get the mesh and the material in order to render it
         // TODO optimize this by pipeline binding (rebinding the same pipeline multiple times is a waste of resources)
         world.each<RenderComponent, TransformComponent>(
-            [&](EntityId, const RenderComponent& renderComponent, const TransformComponent& transformComponent) {
+            [&](const EntityId id, const RenderComponent& renderComponent, const TransformComponent& transformComponent) {
             const auto& mesh = renderComponent.mesh;
             if (!mesh) return;
 
@@ -776,7 +777,7 @@ namespace ytail {
             SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
             SDL_BindGPUIndexBuffer(renderPass, &indexBinding, mesh->indexSize);
             // transform uniform (uses the camera input from the top of this function)
-            const glm::mat4 model = transformComponent.worldMatrix();
+            const glm::mat4 model = GameplayStatics::renderWorldMatrix(world, id, alpha);
             VertexUniform vsu{
                 projection * view * model,
                 model,
@@ -840,7 +841,7 @@ namespace ytail {
         if (outlinePipeline) {
             SDL_BindGPUGraphicsPipeline(renderPass, outlinePipeline);
             world.each<RenderComponent, TransformComponent>(
-                [&](EntityId, const RenderComponent& renderComponent, const TransformComponent& transformComponent) {
+                [&](const EntityId id, const RenderComponent& renderComponent, const TransformComponent&) {
                     if (!renderComponent.outline) return;
                     const auto& mesh = renderComponent.mesh;
                     if (!mesh) return;
@@ -851,7 +852,7 @@ namespace ytail {
                     SDL_BindGPUIndexBuffer(renderPass, &indexBinding, mesh->indexSize);
 
                     // Scale the model about its local origin so the shell pokes out past the mesh.
-                    const glm::mat4 model = transformComponent.worldMatrix()
+                    const glm::mat4 model = GameplayStatics::renderWorldMatrix(world, id, alpha)
                         * glm::scale(glm::mat4(1.0f), glm::vec3(renderComponent.outlineScale));
                     VertexUniform vsu{ projection * view * model, model, glm::mat4(1.0f) };
                     SDL_PushGPUVertexUniformData(commandBuffer, 0, &vsu, sizeof(vsu));
@@ -998,6 +999,9 @@ namespace ytail {
         SDL_GetWindowSize(window, &w, &h);
         if (w == 0 || h == 0) return false;
 
+        // TODO not interpolated, unlike the meshes drawn with GameplayStatics::renderWorldMatrix.
+        // Harmless while the camera has no rigidbody, but a physics-driven camera will shear the
+        // world against itself. Needs alpha threaded through here and screenPointToRay.
         outView = glm::inverse(camTransform->worldMatrix());
         outProjection = camComp->projectionMatrix(static_cast<float>(w) / static_cast<float>(h));
         return true;

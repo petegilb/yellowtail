@@ -27,7 +27,10 @@ namespace ytail {
     RigidbodyComponent::RigidbodyComponent(RigidbodyComponent&& other) noexcept
         : Component(std::move(other)),
           colliders(std::move(other.colliders)), type(other.type),
-          body(other.body), bodyDirty(other.bodyDirty) {
+          body(other.body), bodyDirty(other.bodyDirty),
+          previousPosition(other.previousPosition), previousRotation(other.previousRotation),
+          currentPosition(other.currentPosition), currentRotation(other.currentRotation),
+          poseCount(other.poseCount) {
         other.body = InvalidBody; // the old copy's destructor must not delete the live body
     }
 
@@ -39,6 +42,11 @@ namespace ytail {
         type = other.type;
         body = other.body;
         bodyDirty = other.bodyDirty;
+        previousPosition = other.previousPosition;
+        previousRotation = other.previousRotation;
+        currentPosition = other.currentPosition;
+        currentRotation = other.currentRotation;
+        poseCount = other.poseCount;
         other.body = InvalidBody;
         return *this;
     }
@@ -49,6 +57,7 @@ namespace ytail {
         if (bodyDirty && body != InvalidBody) {
             PhysicsManager::get().removeBody(body);
             body = InvalidBody;
+            poseCount = 0;
         }
         bodyDirty = false;
 
@@ -73,11 +82,25 @@ namespace ytail {
         // works in world space and this writes into the local position/rotation, so a moving body
         // is expected to be a root entity. Parenting one is unsupported (sim wins).
         if (type != BodyType::Static) {
-            glm::vec3 pos; glm::quat rot;
-            PhysicsManager::get().getBodyTransform(body, pos, rot);
-            transform->setPosition(pos);
-            transform->setRotation(rot);
+            glm::vec3 position;
+            glm::quat rotation;
+            PhysicsManager::get().getBodyTransform(body, position, rotation);
+            transform->setPosition(position);
+            transform->setRotation(rotation);
+            previousPosition = currentPosition;
+            previousRotation = currentRotation;
+            currentPosition = position;
+            currentRotation = rotation;
+            if (poseCount < 2) ++poseCount;
         }
+    }
+
+    glm::vec3 RigidbodyComponent::getInterpolatedPosition(float alpha) const {
+        return glm::mix(previousPosition, currentPosition, alpha);
+    }
+
+    glm::quat RigidbodyComponent::getInterpolatedRotation(float alpha) const {
+        return glm::slerp(previousRotation, currentRotation, alpha);
     }
 
     void RigidbodyComponent::tick(float deltaTime) {

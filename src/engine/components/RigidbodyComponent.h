@@ -35,6 +35,12 @@ namespace ytail {
         // Editor gizmo writes a collider's body-local offset/rotation and flags a rebuild.
         void setColliderTransform(size_t index, const glm::vec3& offset, const glm::quat& rotation);
 
+        // The last two simulated poses. Rendering blends between them so motion stays smooth when
+        // the frame rate and the fixed step disagree.
+        [[nodiscard]] bool hasInterpolatedPose() const { return poseCount >= 2; }
+        [[nodiscard]] glm::vec3 getInterpolatedPosition(float alpha) const;
+        [[nodiscard]] glm::quat getInterpolatedRotation(float alpha) const;
+
         static constexpr const char* SerialId = "rigidbody";
         void serialize(Archive& ar) override;
         [[nodiscard]] const char* serialId() const override { return SerialId; }
@@ -48,6 +54,12 @@ namespace ytail {
 
         physics::BodyHandle body = physics::InvalidBody;
         bool bodyDirty = false;
+        glm::vec3 previousPosition{0.0f};
+        glm::quat previousRotation{1.0f, 0.0f, 0.0f, 0.0f};
+        glm::vec3 currentPosition{0.0f};
+        glm::quat currentRotation{1.0f, 0.0f, 0.0f, 0.0f};
+        // 0 until the body has been stepped twice, so the first frames don't blend against a default pose
+        int poseCount = 0;
     };
 } // ytail
 

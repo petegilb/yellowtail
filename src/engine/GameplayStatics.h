@@ -7,6 +7,10 @@
 
 #include <cstdint>
 
+#include <glm/mat4x4.hpp>
+
+#include "Entity.h"
+
 namespace ytail {
     class Engine;
     class World;
@@ -21,6 +25,9 @@ namespace ytail {
 
         // The engine's entity/component storage, or nullptr before the engine exists.
         [[nodiscard]] static World* getWorld();
+
+        // World matrix to draw with, blending the last two simulated poses by alpha.
+        [[nodiscard]] static glm::mat4 renderWorldMatrix(const World& world, EntityId id, float alpha);
 
     private:
         // the engine binds itself here at construction
