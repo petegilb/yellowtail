@@ -8,7 +8,6 @@
 
 #include <SDL3/SDL.h>
 
-#include "steam/steam_api.h"
 #include "steam/isteamnetworkingsockets.h"
 #include "steam/isteamnetworkingutils.h"
 
@@ -71,7 +70,7 @@ namespace ytail {
 
         pollGroup = sockets->CreatePollGroup();
 
-        SteamNetworkingIdentity identity;
+        SteamNetworkingIdentity identity{};
         identity.Clear();
         identity.SetSteamID64(hostSteamId);
 
@@ -95,12 +94,12 @@ namespace ytail {
 
         pollGroup = sockets->CreatePollGroup();
 
-        SteamNetworkingIPAddr address;
+        SteamNetworkingIPAddr address{};
         address.Clear();
         address.SetIPv4(0, port);
 
         // Loopback / LAN peers have no Steam cert, so allow unauthenticated IP connections.
-        SteamNetworkingConfigValue_t allowWithoutAuth;
+        SteamNetworkingConfigValue_t allowWithoutAuth{};
         allowWithoutAuth.SetInt32(k_ESteamNetworkingConfig_IP_AllowWithoutAuth, 1);
 
         listenSocket = sockets->CreateListenSocketIP(address, 1, &allowWithoutAuth);
@@ -121,11 +120,11 @@ namespace ytail {
 
         pollGroup = sockets->CreatePollGroup();
 
-        SteamNetworkingIPAddr address;
+        SteamNetworkingIPAddr address{};
         address.Clear();
         address.SetIPv4(0x7f000001, port); // 127.0.0.1
 
-        SteamNetworkingConfigValue_t allowWithoutAuth;
+        SteamNetworkingConfigValue_t allowWithoutAuth{};
         allowWithoutAuth.SetInt32(k_ESteamNetworkingConfig_IP_AllowWithoutAuth, 1);
 
         const HSteamNetConnection connection = sockets->ConnectByIPAddress(address, 1, &allowWithoutAuth);
@@ -203,7 +202,7 @@ namespace ytail {
         for (const uint32_t connection : connections) {
             char identity[128] = "?";
             char address[64] = "?";
-            SteamNetConnectionInfo_t info;
+            SteamNetConnectionInfo_t info{};
             if (sockets->GetConnectionInfo(connection, &info)) {
                 info.m_identityRemote.ToString(identity, sizeof(identity));
                 info.m_addrRemote.ToString(address, sizeof(address), true);
@@ -211,7 +210,7 @@ namespace ytail {
             ImGui::BulletText("%s  (%s)", identity, address);
 
             ImGui::Indent();
-            SteamNetConnectionRealTimeStatus_t status;
+            SteamNetConnectionRealTimeStatus_t status{};
             if (sockets->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) != k_EResultOK) {
                 ImGui::Text("connecting...  [#%u]", connection);
             } else if (status.m_flConnectionQualityLocal < 0.0f) {

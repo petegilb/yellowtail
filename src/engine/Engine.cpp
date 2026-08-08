@@ -28,6 +28,7 @@
 #include "components/TransformComponent.h"
 #include "components/CameraComponent.h"
 #include "components/LightComponent.h"
+#include "components/NetworkComponent.h"
 #include "managers/ResourceManager.h"
 
 namespace ytail {
@@ -53,8 +54,8 @@ namespace ytail {
         if (ImGui::GetCurrentContext()) shutdownImGui();
 
         // Release everything that owns GPU resources BEFORE destroying the device.
-        world.clear(); // RenderComponents drop their shared_ptr<Mesh>/Material
-        debugLineRenderer.reset(); // frees the debug line vertex/transfer buffers
+        world.clear();
+        debugLineRenderer.reset();
         gridLineRenderer.reset();
         gizmoLineRenderer.reset();
         billboardRenderer.reset();
@@ -226,6 +227,28 @@ namespace ytail {
         }
         if (app) app->fixedTick(deltaTime);
         world.fixedTickAll(deltaTime);
+
+        // TODO get all networked entities
+        // create snapshots for that entity by getting all of its components and calling
+        // netSerialize() on each of them. -- instead im going to just go with a centralized netSerialize function
+        // how do i calculate the netId for all of them -- just a counter on the host
+        // check our snapshot buffer for each client to see if it exists
+        // how should i represent the time in the snapshots? -- use the fixedTick from the server
+        // the quake 3 snapshots are just a big struct
+        // so for snapshot interpolation we generally don't care if we drop a snapshot packet since we will send
+        // a new one very soon, but how does that work with delta serialization if we don't know if the client
+        // actually received it or not? -- we go based on the last acknowledged snapshot from the client
+        // should i have a state replication field type and a snapshot field type where state replication
+        // makes sure it gets acked (in this case it would just be sending a reliable message with steam, right?)
+        // and then snapshot interpolation would be unreliable?
+        // the system will not be fully server authoritative -- clients will be authoritative for their own characters
+        // plus any objects that they are holding/interacting with (if multiple interactors -- server)
+        // physics bodies that are not being simulated can be kinematic so Jolt still calculates velocity
+        // it seems like we can create different lanes for the snapshots and for other rpcs like playing fx
+        world.each<NetworkComponent>([&](const EntityId id, const auto& comp) {
+
+        });
+
         tickNumber++;
     }
 
