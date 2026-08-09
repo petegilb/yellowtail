@@ -4,5 +4,17 @@
 
 #include "NetworkComponent.h"
 
+#include "imgui.h"
+
 namespace ytail {
+    void NetworkComponent::drawInspector() {
+        const char* authorityNames[] = { "Host", "Owner", "Remote" };
+        ImGui::Text("Net Id: %u", netId);
+        if (ownerConnection == 0) {
+            ImGui::TextUnformatted("Owner: host");
+        } else {
+            ImGui::Text("Owner: connection %u", ownerConnection);
+        }
+        ImGui::Text("Authority: %s", authorityNames[static_cast<int>(authority)]);
+    }
 } // ytail

@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-namespace ytail {
+namespace ytail::net {
     // Receives connection lifecycle and message events from NetPeer. The game implements this now;
     // the replication system implements it later. The data passed to onMessage is valid only for the
     // duration of the call, so copy anything you keep.
@@ -18,6 +18,6 @@ namespace ytail {
         virtual void onDisconnected(uint32_t connection) {}
         virtual void onMessage(uint32_t connection, const void* data, uint32_t size) {}
     };
-} // ytail
+} // ytail::net
 
 #endif //YELLOWTAIL_INETWORKEVENTHANDLER_H

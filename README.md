@@ -66,6 +66,7 @@ yellowtail/
 - https://learnopengl.com/Advanced-Lighting/Shadows/Shadow-Mapping
 - https://learnopengl.com/Advanced-Lighting/Shadows/Point-Shadows
 - https://learnopengl.com/Guest-Articles/2021/CSM
+- https://www.gafferongames.com/categories/building-a-game-network-protocol/
 
 ## Shaders (SDL_gpu via SDL_shadercross)
 

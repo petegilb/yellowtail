@@ -12,7 +12,7 @@
 class ISteamNetworkingSockets;
 class ISteamNetworkingUtils;
 
-namespace ytail {
+namespace ytail::net {
     class INetworkEventHandler;
 
     enum class NetConnState { Connecting, Connected, Closed };
@@ -88,6 +88,6 @@ namespace ytail {
         bool hosting = false;
         bool active = false;
     };
-} // ytail
+} // ytail::net
 
 #endif //YELLOWTAIL_NETPEER_H

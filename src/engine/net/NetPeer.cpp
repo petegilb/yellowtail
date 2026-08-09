@@ -15,7 +15,7 @@
 
 #include "engine/net/INetworkEventHandler.h"
 
-namespace ytail {
+namespace ytail::net {
     // The backend's status callback is a plain function pointer, so it reaches the active peer through
     // this file-static pointer. There is one networking peer per process.
     static NetPeer* activePeer = nullptr;
@@ -284,4 +284,4 @@ namespace ytail {
         active = false;
         hosting = false;
     }
-} // ytail
+} // ytail::net

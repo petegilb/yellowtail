@@ -12,6 +12,7 @@
 #include "../components/FreeMovementComponent.h"
 #include "../components/RigidbodyComponent.h"
 #include "../components/RenderComponent.h"
+#include "../components/NetworkComponent.h"
 
 namespace ytail {
     Component* ComponentRegistry::emplaceById(const std::string& id, World& world, const EntityId entity) const {
@@ -46,5 +47,6 @@ namespace ytail {
         registerType<FreeMovementComponent>(FreeMovementComponent::SerialId);
         registerType<RigidbodyComponent>(RigidbodyComponent::SerialId);
         registerType<RenderComponent>(RenderComponent::SerialId);
+        registerType<NetworkComponent>(NetworkComponent::SerialId);
     }
 } // ytail

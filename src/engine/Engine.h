@@ -72,7 +72,7 @@ namespace ytail {
         [[nodiscard]] Uint64 getTickNumber() const { return tickNumber; }
 
 #if YELLOWTAIL_WITH_NETWORKING
-        [[nodiscard]] ReplicationManager& getReplication() { return replication; }
+        [[nodiscard]] net::ReplicationManager& getReplication() { return replication; }
 #endif
 
         // Create (or resize) the depth+stencil texture to match the given pixel size.
@@ -244,7 +244,7 @@ namespace ytail {
         World world;
 
 #if YELLOWTAIL_WITH_NETWORKING
-        ReplicationManager replication;
+        net::ReplicationManager replication;
 #endif
 
         // The camera to render from this frame. Looked up through the world each use, so a
