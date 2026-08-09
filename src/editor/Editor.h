@@ -58,6 +58,12 @@ namespace ytail
         [[nodiscard]] bool canLaunchMultiplayer() const { return !gameExecutable.empty(); }
         // Spawn instanceCount local game processes: instance 0 hosts, the rest connect to it.
         void launchLocalMultiplayer(int instanceCount);
+        // Write the live scene into the game build's assets, so launching sees editor edits.
+        void mirrorSceneToGame() const;
+        // Kill every instance we spawned. Also runs from the destructor.
+        void closeLocalMultiplayer();
+        // Live instances, with any that exited on their own dropped first.
+        [[nodiscard]] int getRunningInstanceCount();
 
     protected:
         void handleInput(const SDL_KeyboardEvent& keyboard_event);

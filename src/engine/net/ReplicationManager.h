@@ -5,6 +5,7 @@
 #ifndef YELLOWTAIL_REPLICATIONMANAGER_H
 #define YELLOWTAIL_REPLICATIONMANAGER_H
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <unordered_map>
@@ -17,14 +18,28 @@
 
 namespace ytail {
     class Engine;
+    class DebugDraw;
 }
 
 namespace ytail::net {
     class NetPeer;
 
+    // Bytes over a sampling window, turned into a rate for the debug panel.
+    struct BandwidthMeter {
+        int bytesThisWindow = 0;
+        float bytesPerSecond = 0.0f;
+        Uint64 windowStartMs = 0;
+
+        void add(const int bytes) { bytesThisWindow += bytes; }
+    };
+
     struct EntitySnapshot {
         uint32_t netId = 0;
-        uint32_t ownerConnection = 0;
+        // The host's EntityId. Scene loading preserves ids, so a client can match this to its own
+        // copy. TODO only needed the first time a client sees a netId; move it into spawn records
+        // along with the component data a runtime-spawned entity needs.
+        uint32_t hostEntityId = 0;
+        uint32_t ownerPeerId = 0;
         QuantizedPose pose;
     };
 
@@ -38,6 +53,7 @@ namespace ytail::net {
 
     // A client gets one full snapshot reliably, then nothing until it acks
     struct ClientSyncState {
+        uint32_t peerId = 0;
         Uint64 ackedTick = 0;
         Uint64 pendingBaselineTick = 0;
 
@@ -54,6 +70,8 @@ namespace ytail::net {
     // between them. Owned by Engine, inert until bind() supplies a peer.
     class ReplicationManager {
     public:
+        ReplicationManager() = default;
+        ReplicationManager(Engine* inEngine, NetPeer* inPeer);
         void attach(Engine* inEngine) { engine = inEngine; }
         void bind(NetPeer* inPeer) { peer = inPeer; }
         [[nodiscard]] bool isBound() const { return engine != nullptr && peer != nullptr; }
@@ -75,9 +93,21 @@ namespace ytail::net {
         void onConnected(uint32_t connection);
         void onDisconnected(uint32_t connection);
         void drawDebugUI();
+        // Wire markers at the newest snapshot pose, with a line to where the entity actually is.
+        // The gap between them is the interpolation delay made visible.
+        void drawSnapshotGhosts(DebugDraw& debug) const;
+        bool showGhosts = false;
+
+        // Host only. Hands an entity to a peer, or back to the host with peerId 0. The change
+        // reaches everyone through the snapshot, which repeats it until acked.
+        void setOwner(EntityId id, uint32_t peerId);
+        [[nodiscard]] uint32_t getLocalPeerId() const { return localPeerId; }
 
         // Fixed ticks between snapshots: 6 at 60Hz is 10 per second.
         static constexpr Uint64 SnapshotSendInterval = 6;
+        // Owned poses go out faster than snapshots so the host's physics sees smooth motion from
+        // them, but not every tick: the host downsamples to the snapshot rate when it rebroadcasts.
+        static constexpr Uint64 ClientStateSendInterval = 2;
         // How far behind the newest snapshot a client plays back, in send intervals.
         static constexpr float InterpolationDelayIntervals = 2.0f;
         // Snapshots older than this are dropped from either ring.
@@ -90,14 +120,27 @@ namespace ytail::net {
         bool writeSnapshot(BitWriter& writer, const WorldSnapshot& snapshot,
                            const WorldSnapshot* baseline, int& outChangedEntities) const;
         void onSnapshotMessage(int size);
-        // Client to host: the snapshot ack today, plus input and owned entity poses later.
-        void onInputMessage(uint32_t connection, int size);
-        void sendInput();
+        // Client to host: the snapshot ack plus poses for entities this peer owns.
+        void onClientStateMessage(uint32_t connection, int size);
+        void sendClientState();
+        void onWelcomeMessage(int size);
+        void sendWelcome(uint32_t connection, uint32_t peerId);
+        // Recomputes each entity's authority from its owner and who we are.
+        void refreshAuthority();
+        [[nodiscard]] uint32_t ownerPeerIdFor(uint32_t netId) const;
         void advanceClock();
+        // Blends the two snapshots straddling playbackTick onto the world.
+        void applyInterpolated(float deltaTime);
+        // Host side: drives entities a client owns from the pose that client reported.
+        void applyOwnedPoses(float deltaTime);
+        // The local entity for a netId, or NULL_ENTITY if this peer has no copy of it.
+        EntityId resolveEntity(uint32_t netId, uint32_t hostEntityId);
         void resetReceivedState();
 
         [[nodiscard]] const WorldSnapshot* findSent(Uint64 tick) const;
         [[nodiscard]] const WorldSnapshot* findReceived(Uint64 tick) const;
+        void sampleBandwidth();
+        void drawEntityTable();
 
         Engine* engine = nullptr;
         NetPeer* peer = nullptr;
@@ -108,8 +151,13 @@ namespace ytail::net {
         std::vector<uint32_t> receiveWords;
 
         uint32_t nextNetId = 1;
+        uint32_t nextPeerId = 1;
         std::deque<WorldSnapshot> sentHistory;
         std::unordered_map<uint32_t, ClientSyncState> clients;
+        // Latest pose a peer reported for an entity it owns, applied on the host each tick.
+        std::unordered_map<uint32_t, QuantizedPose> ownedPoseByNetId;
+
+        uint32_t localPeerId = 0;
 
         std::deque<WorldSnapshot> receivedHistory;
         std::unordered_map<uint32_t, EntityId> entityByNetId;
@@ -119,6 +167,14 @@ namespace ytail::net {
 
         int lastSnapshotEntities = 0;
         int droppedForMissingBaseline = 0;
+        int lastReceivedChanged = 0;
+        // Drift sawtooths by one send interval, so the panel shows a smoothed value and a plot
+        // rather than a number that is unreadable at frame rate.
+        float smoothedDrift = 0.0f;
+        std::array<float, 120> driftHistory{};
+        int driftHistoryIndex = 0;
+        BandwidthMeter sentBytes;
+        BandwidthMeter receivedBytes;
     };
 } // ytail::net
 

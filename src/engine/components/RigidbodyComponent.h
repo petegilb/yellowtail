@@ -31,9 +31,17 @@ namespace ytail {
 
         std::vector<physics::ColliderDef> colliders{ {} };
         physics::BodyType type = physics::BodyType::Dynamic;
+        // Above this, driveTo teleports rather than deriving a velocity. Raise it for fast movers.
+        float maxDrivenSpeed = 50.0f;
 
         // Editor gizmo writes a collider's body-local offset/rotation and flags a rebuild.
         void setColliderTransform(size_t index, const glm::vec3& offset, const glm::quat& rotation);
+
+        // Hands the body to the network: it becomes kinematic so the local solver stops deciding
+        // where it goes, and driveTo moves it so Jolt still derives a velocity to push things with.
+        void setNetworkDriven(bool driven);
+        [[nodiscard]] bool isNetworkDriven() const { return networkDriven; }
+        void driveTo(const glm::vec3& position, const glm::quat& rotation, float deltaTime);
 
         // The last two simulated poses. Rendering blends between them so motion stays smooth when
         // the frame rate and the fixed step disagree.
@@ -54,6 +62,8 @@ namespace ytail {
 
         physics::BodyHandle body = physics::InvalidBody;
         bool bodyDirty = false;
+        bool networkDriven = false;
+        physics::BodyType authoredType = physics::BodyType::Dynamic;
         glm::vec3 previousPosition{0.0f};
         glm::quat previousRotation{1.0f, 0.0f, 0.0f, 0.0f};
         glm::vec3 currentPosition{0.0f};

@@ -4,6 +4,8 @@
 
 #include "RigidbodyComponent.h"
 
+#include <cmath>
+
 #include "imgui.h"
 
 #include "TransformComponent.h"
@@ -14,6 +16,9 @@
 
 namespace ytail {
     using namespace physics;
+
+    // cos of half the largest rotation step driveTo will derive an angular velocity from (~23 degrees).
+    constexpr float MaxDrivenRotationCos = 0.98f;
 
     void RigidbodyComponent::serialize(Archive& ar) {
         ar("colliders", colliders);
@@ -112,6 +117,37 @@ namespace ytail {
         if (!GameplayStatics::isSimulating()) {
             PhysicsManager::get().setBodyTransform(body, transform->getPosition(), transform->getRotation());
         }
+    }
+
+    void RigidbodyComponent::setNetworkDriven(const bool driven) {
+        if (networkDriven == driven) return;
+        networkDriven = driven;
+        if (driven) authoredType = type;
+
+        // Switched in place rather than through bodyDirty: a rebuild would drop velocity, contacts and the BodyID.
+        type = driven ? BodyType::Kinematic : authoredType;
+        if (body != InvalidBody) PhysicsManager::get().setBodyMotionType(body, type);
+        poseCount = 0;
+    }
+
+    void RigidbodyComponent::driveTo(const glm::vec3& position, const glm::quat& rotation, const float deltaTime) {
+        if (body == InvalidBody || !networkDriven || deltaTime <= 0.0f) return;
+
+        glm::vec3 bodyPosition;
+        glm::quat bodyRotation;
+        PhysicsManager::get().getBodyTransform(body, bodyPosition, bodyRotation);
+
+        // Past these limits the derived velocity would launch whatever this body is touching, so
+        // teleport and give up the push for a frame.
+        const glm::vec3 step = position - bodyPosition;
+        const float maxStep = maxDrivenSpeed * deltaTime;
+        const float rotationDot = std::abs(glm::dot(bodyRotation, rotation));
+        if (glm::dot(step, step) > maxStep * maxStep || rotationDot < MaxDrivenRotationCos) {
+            PhysicsManager::get().setBodyTransform(body, position, rotation);
+            return;
+        }
+
+        PhysicsManager::get().moveKinematic(body, position, rotation, deltaTime);
     }
 
     void RigidbodyComponent::setColliderTransform(size_t index, const glm::vec3 &offset, const glm::quat &rotation) {

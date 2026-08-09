@@ -5,6 +5,7 @@
 #ifndef YELLOWTAIL_ENGINE_H
 #define YELLOWTAIL_ENGINE_H
 
+#include <string>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -33,6 +34,10 @@ namespace ytail {
     public:
         Engine();
         ~Engine();
+
+        // Fixed simulation timestep: 60 steps/sec. Physics + deterministic gameplay run at this rate
+        // regardless of render frame rate.
+        static constexpr float FIXED_DT = 1.0f / 60.0f;
 
         // The application (game or editor) the engine drives. Non-owning; set before run().
         void setApplication(Application* inApp) { app = inApp; }
@@ -98,6 +103,10 @@ namespace ytail {
         void setWindowPosition(int windowX, int windowY) {
             if (window != nullptr) SDL_SetWindowPosition(window, windowX, windowY);
         }
+        // Leading part of the window title; the FPS counter appends to it every second.
+        void setWindowTitle(const std::string& title) { windowTitle = title; }
+        // Size and place this window into cell `index` of a grid filling the display.
+        void tileWindow(int index, int columns = 2);
         // Unique resolutions supported by the given display (0 == the window's current display).
         [[nodiscard]] std::vector<glm::ivec2> getAvailableResolutions(SDL_DisplayID display) const;
 
@@ -223,9 +232,6 @@ namespace ytail {
         // 0 == primary/current
         SDL_DisplayID targetDisplay = 0;
 
-        // Fixed simulation timestep: 60 steps/sec. Physics + deterministic gameplay run at this rate
-        // regardless of render frame rate.
-        static constexpr float FIXED_DT = 1.0f / 60.0f;
         // Cap on accumulated time so a hitch can't trigger a runaway catch-up.
         // Past this, the sim briefly runs in slow motion instead of trying to replay every missed step.
         static constexpr float MAX_ACCUMULATOR = 0.25f;
@@ -238,6 +244,8 @@ namespace ytail {
         // locks the framerate if greater than 0
         int framerateLock = 0;
         int drawCallsLastFrame = 0;
+
+        std::string windowTitle = "yellowtail";
 
         // world stuff
         glm::vec3 ambientLight{0.0f}; // currently set to ambientDebug

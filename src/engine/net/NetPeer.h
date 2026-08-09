@@ -18,11 +18,13 @@ namespace ytail::net {
     enum class NetConnState { Connecting, Connected, Closed };
 
     // First byte of every payload, so a receiver can route without guessing. Never renumber these.
+    // Values from GameFirst up are the game's to define; the engine forwards them uninterpreted.
     enum class NetMessageType : uint8_t {
         Snapshot = 1,
-        Input = 2,
-        Event = 3,
-        Text = 4,
+        ClientState = 2,
+        Welcome = 3,
+        RequestOwnership = 4,
+        GameFirst = 128,
     };
 
     // Connection layer over ISteamNetworkingSockets. One instance either hosts a listen server or

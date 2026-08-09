@@ -858,6 +858,15 @@ namespace ytail
             editor->launchLocalMultiplayer(multiplayerInstanceCount);
         }
 
+        const int running = editor->getRunningInstanceCount();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(running == 0);
+        if (ImGui::Button("Close All")) {
+            editor->closeLocalMultiplayer();
+        }
+        ImGui::EndDisabled();
+        ImGui::Text("Running: %d", running);
+
         ImGui::End();
     }
 

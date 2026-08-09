@@ -17,7 +17,8 @@ namespace ytail {
     class NetworkComponent : public Component {
     public:
         uint32_t netId = 0;
-        uint32_t ownerConnection = 0;
+        // Host-assigned peer number, 0 = the host. Connection handles are host-local.
+        uint32_t ownerPeerId = 0;
         NetAuthority authority = NetAuthority::Host;
 
         [[nodiscard]] bool isAuthoritative() const { return authority != NetAuthority::Remote; }

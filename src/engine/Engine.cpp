@@ -175,8 +175,8 @@ namespace ytail {
                 fpsTimer = frameStart;
                 const double frameMs = fps > 0 ? 1000.0 / static_cast<double>(fps) : 0.0;
                 char title[128];
-                SDL_snprintf(title, sizeof(title), "yellowtail | %d FPS | %.2f ms/frame",
-                             static_cast<int>(fps), frameMs);
+                SDL_snprintf(title, sizeof(title), "%s | %d FPS | %.2f ms/frame",
+                             windowTitle.c_str(), static_cast<int>(fps), frameMs);
                 SDL_SetWindowTitle(window, title);
                 fps = 0;
             }
@@ -465,6 +465,26 @@ namespace ytail {
         return out;
     }
 
+    void Engine::tileWindow(const int index, const int columns) {
+        if (window == nullptr || index < 0 || columns < 1) return;
+
+        SDL_Rect bounds;
+        if (!SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window), &bounds)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Could not read display bounds: %s", SDL_GetError());
+            return;
+        }
+
+        const int width = bounds.w / columns;
+        const int height = bounds.h / 2;
+        SDL_SetWindowSize(window, width, height);
+        SDL_SetWindowPosition(window,
+                              bounds.x + index % columns * width,
+                              bounds.y + index / columns % 2 * height);
+        // Both calls are requests the window manager may defer, which on macOS leaves the windows
+        // stacked at their default position.
+        SDL_SyncWindow(window);
+    }
+
     void Engine::setTargetDisplay(const SDL_DisplayID display) {
         targetDisplay = display;
         // Drop any fullscreen resolution choice so the new display uses its own desktop mode.
@@ -516,7 +536,6 @@ namespace ytail {
         const World& world,
         Uint32 selectedEntity
     ) {
-        debug.clear();
         world.each<LightComponent, TransformComponent>(
             [&](const EntityId id, const LightComponent& light, const TransformComponent& transform) {
                 const glm::vec4 color(light.color, 1.0f);
@@ -617,10 +636,14 @@ namespace ytail {
             gridLineRenderer->upload(commandBuffer, gridLineScratch);
         }
 
-        // Editor light gizmos: rebuild + stage (same before-pass copy rule).
-        if (showLightGizmos && gizmoLineRenderer) {
-            buildLightGizmos(gizmoDraw, world, selectedEntity);
-            gizmoLineRenderer->upload(commandBuffer, gizmoDraw.vertices());
+        // Editor light gizmos and network ghosts share one line buffer, so the caller clears it.
+        if (gizmoLineRenderer) {
+            gizmoDraw.clear();
+            if (showLightGizmos) buildLightGizmos(gizmoDraw, world, selectedEntity);
+#if YELLOWTAIL_WITH_NETWORKING
+            replication.drawSnapshotGhosts(gizmoDraw);
+#endif
+            if (!gizmoDraw.empty()) gizmoLineRenderer->upload(commandBuffer, gizmoDraw.vertices());
         }
 
         // Render scene depth from the sun's POV so the scene pass can sample it. The map is always
@@ -889,8 +912,8 @@ namespace ytail {
                 resourceManager->getPipeline(PipelineType::DebugLine), projection * view);
         }
 
-        // Light gizmos, on top of the scene using the same flat line pipeline.
-        if (showLightGizmos && gizmoLineRenderer) {
+        // Light gizmos and network ghosts, on top of the scene using the same flat line pipeline.
+        if (gizmoLineRenderer && !gizmoDraw.empty()) {
             gizmoLineRenderer->draw(renderPass, commandBuffer,
                 resourceManager->getPipeline(PipelineType::DebugLine), projection * view);
         }

@@ -4,6 +4,7 @@
 
 #include "Editor.h"
 
+#include <filesystem>
 #include <fstream>
 
 #include <glm/glm.hpp>
@@ -43,15 +44,53 @@ namespace ytail
 
     Editor::~Editor(){
         // Kill the local-test instances we spawned so closing the editor closes them too.
+        closeLocalMultiplayer();
+        SDL_Log("Editor destroyed!");
+    }
+
+    void Editor::closeLocalMultiplayer() {
         for (SDL_Process* process : spawnedProcesses) {
             SDL_KillProcess(process, true);
             SDL_DestroyProcess(process);
         }
-        SDL_Log("Editor destroyed!");
+        spawnedProcesses.clear();
+    }
+
+    int Editor::getRunningInstanceCount() {
+        std::erase_if(spawnedProcesses, [](SDL_Process* process) {
+            int exitCode = 0;
+            // Non-blocking: true means it already exited, so stop tracking it.
+            if (!SDL_WaitProcess(process, false, &exitCode)) return false;
+            SDL_DestroyProcess(process);
+            return true;
+        });
+        return static_cast<int>(spawnedProcesses.size());
+    }
+
+    // The game reads assets from its own build folder, refreshed only by the post-build copy. Write
+    // the live scene there so launching picks up edits without a rebuild.
+    void Editor::mirrorSceneToGame() const {
+        if (gameExecutable.empty()) return;
+
+        const std::filesystem::path destination =
+            std::filesystem::path(gameExecutable).parent_path() / "assets" / currentScenePath;
+        std::error_code error;
+        std::filesystem::create_directories(destination.parent_path(), error);
+
+        std::ofstream file(destination);
+        if (!file.is_open()) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Could not write scene for the game build: %s",
+                        destination.string().c_str());
+            return;
+        }
+        file << saveSceneToJson(*engine).dump(2);
+        SDL_Log("Copied scene to the game build: %s", destination.string().c_str());
     }
 
     void Editor::launchLocalMultiplayer(int instanceCount) {
         if (gameExecutable.empty() || instanceCount < 1) return;
+
+        mirrorSceneToGame();
 
         for (int i = 0; i < instanceCount; ++i) {
             const std::string indexArg = std::to_string(i);
@@ -140,6 +179,7 @@ namespace ytail
     void Editor::saveCurrentScene(){
         if (saveScene(*engine, currentScenePath)) {
             mirrorSceneToSource(*engine, currentScenePath);
+            mirrorSceneToGame();
             lastSaveTick = SDL_GetTicks();
         }
     }
