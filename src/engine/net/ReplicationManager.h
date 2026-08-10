@@ -108,6 +108,8 @@ namespace ytail::net {
         // reaches everyone through the snapshot, which repeats it until acked.
         void setOwner(EntityId id, uint32_t peerId);
         [[nodiscard]] uint32_t getLocalPeerId() const { return localPeerId; }
+        // Host only: the peer number assigned to a connection, or 0 if it has none yet.
+        [[nodiscard]] uint32_t getPeerId(uint32_t connection) const;
 
         // Fixed ticks between snapshots: 6 at 60Hz is 10 per second.
         static constexpr Uint64 SnapshotSendInterval = 6;

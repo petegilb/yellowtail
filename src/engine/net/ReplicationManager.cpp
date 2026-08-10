@@ -351,6 +351,11 @@ namespace ytail::net {
         }
     }
 
+    uint32_t ReplicationManager::getPeerId(const uint32_t connection) const {
+        const auto entry = clients.find(connection);
+        return entry == clients.end() ? 0 : entry->second.peerId;
+    }
+
     void ReplicationManager::refreshAuthority() {
         const bool hosting = peer->isHosting();
         engine->getWorld().each<NetworkComponent>([&](const EntityId id, NetworkComponent& network) {
