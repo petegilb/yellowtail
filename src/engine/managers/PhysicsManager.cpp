@@ -252,8 +252,7 @@ namespace ytail::physics {
         const bool movable = def.type != BodyType::Static;
         BodyCreationSettings settings(shape, toJolt(def.position), toJolt(def.rotation),
             toJoltMotionType(def.type), movable ? Layers::MOVING : Layers::NON_MOVING);
-        // Static bodies get no MotionProperties by default, which makes setBodyMotionType assert.
-        settings.mAllowDynamicOrKinematic = true;
+        settings.mAllowDynamicOrKinematic = movable;
 
         const BodyID id = impl->physicsSystem.GetBodyInterface().CreateAndAddBody(
             settings, movable ? EActivation::Activate : EActivation::DontActivate);

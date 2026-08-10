@@ -121,6 +121,7 @@ namespace ytail {
 
     void RigidbodyComponent::setNetworkDriven(const bool driven) {
         if (networkDriven == driven) return;
+        if (driven && type == BodyType::Static) return;
         networkDriven = driven;
         if (driven) authoredType = type;
 

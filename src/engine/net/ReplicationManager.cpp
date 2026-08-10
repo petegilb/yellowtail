@@ -64,7 +64,7 @@ namespace ytail::net {
         sampleBandwidth();
         if (peer->isHosting()) {
             captureHost(tick);
-        } else if (tick % ClientStateSendInterval == 0) {
+        } else if (newestReceivedTick != 0 && tick % ClientStateSendInterval == 0) {
             sendClientState();
         } else {
             return;
@@ -75,7 +75,8 @@ namespace ytail::net {
     void ReplicationManager::captureHost(const Uint64 tick) {
         // History is kept at send granularity, not per tick: a client's acked baseline has to
         // survive long enough for a slow reliable transfer to land and be acknowledged.
-        if (tick % SnapshotSendInterval != 0) return;
+        // Tick 0 is skipped so 0 stays unambiguous as the "nothing acked yet" sentinel.
+        if (tick == 0 || tick % SnapshotSendInterval != 0) return;
 
         World& world = engine->getWorld();
 
@@ -105,7 +106,9 @@ namespace ytail::net {
 
         const WorldSnapshot& latest = sentHistory.back();
         for (const uint32_t connection : connections) {
-            sendSnapshotTo(connection, clients[connection], latest);
+            const auto client = clients.find(connection);
+            if (client == clients.end()) continue;
+            sendSnapshotTo(connection, client->second, latest);
         }
     }
 
@@ -211,6 +214,8 @@ namespace ytail::net {
     }
 
     void ReplicationManager::onSnapshotMessage(const int size) {
+        if (peer->isHosting()) return;
+
         BitReader reader(receiveWords.data(), size);
         reader.readBits(8);
 
@@ -370,20 +375,24 @@ namespace ytail::net {
     }
 
     void ReplicationManager::resetReceivedState() {
-        // Hand the bodies back to the local solver, or they stay kinematic with nothing driving them.
+        // Hand the bodies back to the local solver, or they stay kinematic with nothing driving
+        // them. Every networked entity, not just the mapped ones: a connection that drops before
+        // the first snapshot lands leaves entityByNetId empty with bodies already driven.
         if (engine != nullptr) {
             World& world = engine->getWorld();
-            for (const auto& [netId, id] : entityByNetId) {
+            world.each<NetworkComponent>([&](const EntityId id, NetworkComponent& network) {
+                network.authority = NetAuthority::Host;
                 if (RigidbodyComponent* rigidbody = world.get<RigidbodyComponent>(id)) {
                     rigidbody->setNetworkDriven(false);
                 }
-            }
+            });
         }
         receivedHistory.clear();
         entityByNetId.clear();
         newestReceivedTick = 0;
         playbackTick = 0.0;
         clockStarted = false;
+        localPeerId = 0;
     }
 
     void ReplicationManager::onClientStateMessage(const uint32_t connection, const int size) {
@@ -396,7 +405,9 @@ namespace ytail::net {
         const Uint64 newestSent = sentHistory.empty() ? 0 : sentHistory.back().tick;
         if (ackedTick > newestSent) return;
 
-        ClientSyncState& client = clients[connection];
+        const auto entry = clients.find(connection);
+        if (entry == clients.end()) return;
+        ClientSyncState& client = entry->second;
         client.ackedTick = std::max(client.ackedTick, ackedTick);
 
         const uint32_t ownedCount = reader.readVarUInt();
@@ -406,8 +417,18 @@ namespace ytail::net {
             reader.serializeVarUInt(netId);
             reader.serializePose(pose);
             if (reader.hasOverflowed()) return;
-            // Only accept a pose for something this peer actually owns.
-            if (ownerPeerIdFor(netId) == client.peerId) ownedPoseByNetId[netId] = pose;
+            // Only accept a pose for something this peer actually owns. Peer ids start at 1, so
+            // host-owned and unknown entities can never match a real client.
+            if (ownerPeerIdFor(netId) != client.peerId) continue;
+
+            const auto existing = ownedPoseByNetId.find(netId);
+            if (existing == ownedPoseByNetId.end()) {
+                ownedPoseByNetId[netId] = OwnedPose{ pose, pose, localTick };
+            } else {
+                existing->second.previous = existing->second.current;
+                existing->second.current = pose;
+                existing->second.arrivedTick = localTick;
+            }
         }
     }
 
@@ -448,27 +469,44 @@ namespace ytail::net {
         peer = inPeer;
     }
 
-    void ReplicationManager::applyReceived(Uint64) {
+    void ReplicationManager::applyReceived(const Uint64 tick) {
         if (!isBound() || !peer->isActive()) return;
-        refreshAuthority();
+        localTick = tick;
+
         if (peer->isHosting()) {
-            applyOwnedPoses(Engine::FIXED_DT);
-        } else {
-            advanceClock();
-            applyInterpolated(Engine::FIXED_DT);
+            refreshAuthority();
+            applyOwnedPoses(tick, Engine::FIXED_DT);
+            return;
         }
+        if (newestReceivedTick == 0) return;
+        refreshAuthority();
+        advanceClock();
+        applyInterpolated(Engine::FIXED_DT);
     }
 
-    void ReplicationManager::applyOwnedPoses(const float deltaTime) {
+    void ReplicationManager::applyOwnedPoses(const Uint64 tick, const float deltaTime) {
         World& world = engine->getWorld();
         world.each<NetworkComponent>([&](const EntityId id, const NetworkComponent& network) {
             if (network.authority != NetAuthority::Remote) return;
             const auto reported = ownedPoseByNetId.find(network.netId);
             if (reported == ownedPoseByNetId.end()) return;
+            const OwnedPose& owned = reported->second;
 
+            // Reports land every ClientStateSendInterval ticks. interpolate between them.
+            const double elapsed = tick > owned.arrivedTick
+                ? static_cast<double>(tick - owned.arrivedTick) : 0.0;
+            const float blend = static_cast<float>(
+                std::clamp(elapsed / static_cast<double>(ClientStateSendInterval), 0.0, 1.0));
+
+            glm::vec3 fromPosition;
+            glm::quat fromRotation;
             glm::vec3 position;
             glm::quat rotation;
-            dequantizePose(reported->second, position, rotation);
+            dequantizePose(owned.previous, fromPosition, fromRotation);
+            dequantizePose(owned.current, position, rotation);
+            position = glm::mix(fromPosition, position, blend);
+            rotation = glm::slerp(fromRotation, rotation, blend);
+
             if (RigidbodyComponent* rigidbody = world.get<RigidbodyComponent>(id)) {
                 rigidbody->driveTo(position, rotation, deltaTime);
             } else if (TransformComponent* transform = world.get<TransformComponent>(id)) {
@@ -600,8 +638,30 @@ namespace ytail::net {
         }
     }
 
+    static void ownerLabel(const uint32_t peerId, char* buffer, const size_t size) {
+        if (peerId == 0) {
+            SDL_strlcpy(buffer, "host", size);
+        } else {
+            SDL_snprintf(buffer, size, "peer %u", peerId);
+        }
+    }
+
     void ReplicationManager::drawEntityTable() {
         if (!ImGui::TreeNode("Entities")) return;
+
+        // Peers to offer in the owner picker, host first.
+        const bool hosting = peer->isHosting();
+        std::vector<uint32_t> peerIds;
+        if (hosting) {
+            peerIds.reserve(clients.size() + 1);
+            peerIds.push_back(0);
+            for (const auto& [connection, client] : clients) peerIds.push_back(client.peerId);
+            std::sort(peerIds.begin(), peerIds.end());
+        }
+        // Applied after the pass: setOwner touches the component the iteration is walking.
+        EntityId reassignEntity = NULL_ENTITY;
+        uint32_t reassignPeerId = 0;
+
         if (ImGui::BeginTable("netentities", 4,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("Net Id");
@@ -617,10 +677,29 @@ namespace ytail::net {
                 ImGui::TableNextColumn();
                 ImGui::Text("%u", network.netId);
                 ImGui::TableNextColumn();
-                if (network.ownerPeerId == 0) {
-                    ImGui::TextUnformatted("host");
+                if (!hosting) {
+                    if (network.ownerPeerId == 0) {
+                        ImGui::TextUnformatted("host");
+                    } else {
+                        ImGui::Text("peer %u", network.ownerPeerId);
+                    }
                 } else {
-                    ImGui::Text("peer %u", network.ownerPeerId);
+                    char current[16];
+                    ownerLabel(network.ownerPeerId, current, sizeof(current));
+                    ImGui::PushID(static_cast<int>(id));
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::BeginCombo("##owner", current)) {
+                        for (const uint32_t peerId : peerIds) {
+                            char item[16];
+                            ownerLabel(peerId, item, sizeof(item));
+                            if (ImGui::Selectable(item, network.ownerPeerId == peerId)) {
+                                reassignEntity = id;
+                                reassignPeerId = peerId;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::PopID();
                 }
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(authorityNames[static_cast<int>(network.authority)]);
@@ -634,6 +713,7 @@ namespace ytail::net {
             });
             ImGui::EndTable();
         }
+        if (reassignEntity != NULL_ENTITY) setOwner(reassignEntity, reassignPeerId);
         ImGui::TreePop();
     }
 

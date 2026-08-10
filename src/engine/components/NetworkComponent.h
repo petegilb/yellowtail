@@ -2,8 +2,8 @@
 // Created by Peter Gilbert on 8/8/26.
 //
 
-#ifndef SEABREAM_NETWORKCOMPONENT_H
-#define SEABREAM_NETWORKCOMPONENT_H
+#ifndef YELLOWTAIL_NETWORKCOMPONENT_H
+#define YELLOWTAIL_NETWORKCOMPONENT_H
 
 #include <cstdint>
 
@@ -31,4 +31,4 @@ namespace ytail {
     };
 } // ytail
 
-#endif //SEABREAM_NETWORKCOMPONENT_H
+#endif //YELLOWTAIL_NETWORKCOMPONENT_H

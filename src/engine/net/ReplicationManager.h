@@ -43,6 +43,12 @@ namespace ytail::net {
         QuantizedPose pose;
     };
 
+    struct OwnedPose {
+        QuantizedPose previous;
+        QuantizedPose current;
+        Uint64 arrivedTick = 0;
+    };
+
     // Kept sorted by netId so delta-ing two snapshots is a linear merge, not a lookup per entity.
     struct WorldSnapshot {
         Uint64 tick = 0;
@@ -132,7 +138,7 @@ namespace ytail::net {
         // Blends the two snapshots straddling playbackTick onto the world.
         void applyInterpolated(float deltaTime);
         // Host side: drives entities a client owns from the pose that client reported.
-        void applyOwnedPoses(float deltaTime);
+        void applyOwnedPoses(Uint64 tick, float deltaTime);
         // The local entity for a netId, or NULL_ENTITY if this peer has no copy of it.
         EntityId resolveEntity(uint32_t netId, uint32_t hostEntityId);
         void resetReceivedState();
@@ -144,6 +150,8 @@ namespace ytail::net {
 
         Engine* engine = nullptr;
         NetPeer* peer = nullptr;
+        // The tick applyReceived last ran, so messages decoded between fixed steps can be stamped.
+        Uint64 localTick = 0;
 
         // Reused so a snapshot costs no allocation, and word sized because BitWriter/BitReader
         // spill whole words. receiveWords also pads a message up to a word boundary.
@@ -155,7 +163,7 @@ namespace ytail::net {
         std::deque<WorldSnapshot> sentHistory;
         std::unordered_map<uint32_t, ClientSyncState> clients;
         // Latest pose a peer reported for an entity it owns, applied on the host each tick.
-        std::unordered_map<uint32_t, QuantizedPose> ownedPoseByNetId;
+        std::unordered_map<uint32_t, OwnedPose> ownedPoseByNetId;
 
         uint32_t localPeerId = 0;
 
