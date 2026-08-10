@@ -260,6 +260,22 @@ namespace ytail::physics {
             toJoltMotionType(def.type), movable ? Layers::MOVING : Layers::NON_MOVING);
         settings.mAllowDynamicOrKinematic = movable;
 
+        const BodyProperties& properties = def.properties;
+        settings.mFriction = properties.friction;
+        settings.mRestitution = properties.restitution;
+        settings.mLinearDamping = properties.linearDamping;
+        settings.mAngularDamping = properties.angularDamping;
+        settings.mGravityFactor = properties.gravityFactor;
+        settings.mMaxLinearVelocity = properties.maxLinearVelocity;
+        settings.mMaxAngularVelocity = properties.maxAngularVelocity;
+        settings.mAllowSleeping = properties.allowSleeping;
+        if (properties.overrideMass > 0.0f) {
+            // CalculateInertia keeps the shape's inertia tensor and rescales it to the new mass,
+            // so an overridden ball still rolls like a ball.
+            settings.mOverrideMassProperties = EOverrideMassProperties::CalculateInertia;
+            settings.mMassPropertiesOverride.mMass = properties.overrideMass;
+        }
+
         const BodyID id = impl->physicsSystem.GetBodyInterface().CreateAndAddBody(
             settings, movable ? EActivation::Activate : EActivation::DontActivate);
         if (id.IsInvalid()) {
@@ -393,6 +409,24 @@ namespace ytail::physics {
     void PhysicsManager::setRestitution(BodyHandle handle, float restitution) {
         if (handle == InvalidBody) return;
         impl->physicsSystem.GetBodyInterface().SetRestitution(BodyID(handle), restitution);
+    }
+
+    void PhysicsManager::applyBodyProperties(BodyHandle handle, const BodyProperties& properties) {
+        if (handle == InvalidBody) return;
+        // One lock and Body's own setters: BodyInterface takes the same per-body lock internally.
+        const BodyLockWrite lock(impl->physicsSystem.GetBodyLockInterface(), BodyID(handle));
+        if (!lock.Succeeded()) return;
+        Body& body = lock.GetBody();
+        body.SetFriction(properties.friction);
+        body.SetRestitution(properties.restitution);
+        if (body.IsStatic()) return;
+        body.SetAllowSleeping(properties.allowSleeping);
+        MotionProperties* motion = body.GetMotionProperties();
+        motion->SetLinearDamping(properties.linearDamping);
+        motion->SetAngularDamping(properties.angularDamping);
+        motion->SetGravityFactor(properties.gravityFactor);
+        motion->SetMaxLinearVelocity(properties.maxLinearVelocity);
+        motion->SetMaxAngularVelocity(properties.maxAngularVelocity);
     }
 
     void PhysicsManager::setGravityFactor(BodyHandle handle, float factor) {

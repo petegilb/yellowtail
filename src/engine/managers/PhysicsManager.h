@@ -33,11 +33,27 @@ namespace ytail::physics {
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
     };
 
+    // Per-body tuning, defaulted to Jolt's own values. Contact friction and restitution combine
+    // between the two bodies as sqrt(a * b), so both sides matter.
+    struct BodyProperties {
+        float friction = 0.2f;
+        float restitution = 0.0f;
+        float linearDamping = 0.05f;
+        float angularDamping = 0.05f;
+        float gravityFactor = 1.0f;
+        float maxLinearVelocity = 500.0f;
+        float maxAngularVelocity = 47.123889f;
+        bool allowSleeping = true;
+        // 0 keeps the mass Jolt derives from the shapes. Only read when the body is built.
+        float overrideMass = 0.0f;
+    };
+
     struct BodyDef {
         std::vector<ColliderDef> colliders;
         glm::vec3 position{0.0f}; // body world pose
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
         BodyType type = BodyType::Dynamic;
+        BodyProperties properties;
     };
 
     struct RayHit {
@@ -87,6 +103,8 @@ namespace ytail::physics {
         void setFriction(BodyHandle handle, float friction);
         void setRestitution(BodyHandle handle, float restitution);
         void setGravityFactor(BodyHandle handle, float factor);
+        // Everything but overrideMass, which needs the body rebuilt.
+        void applyBodyProperties(BodyHandle handle, const BodyProperties& properties);
 
         // Closest hit along the ray, where direction carries the ray's length. ignoreBody skips
         // one body, usually the caster's own. Returns false and leaves outHit alone on a miss.

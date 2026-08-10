@@ -840,7 +840,7 @@ namespace ytail
     }
 
     void EditorUI::drawMultiplayerTest() {
-        if (!ImGui::Begin("Multiplayer Test")) {
+        if (!ImGui::Begin("Game Test")) {
             ImGui::End();
             return;
         }
@@ -853,7 +853,7 @@ namespace ytail
 
         ImGui::TextWrapped("Launch local instances that connect over 127.0.0.1. "
                            "Instance 0 hosts, the rest join.");
-        ImGui::SliderInt("Instances", &multiplayerInstanceCount, 2, 8);
+        ImGui::SliderInt("Instances", &multiplayerInstanceCount, 1, 8);
         if (ImGui::Button("Launch")) {
             editor->launchLocalMultiplayer(multiplayerInstanceCount);
         }

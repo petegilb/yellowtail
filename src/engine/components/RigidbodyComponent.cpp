@@ -23,6 +23,7 @@ namespace ytail {
     void RigidbodyComponent::serialize(Archive& ar) {
         ar("colliders", colliders);
         ar("bodyType", type);
+        ar("properties", properties);
     }
 
     RigidbodyComponent::~RigidbodyComponent() {
@@ -31,8 +32,8 @@ namespace ytail {
 
     RigidbodyComponent::RigidbodyComponent(RigidbodyComponent&& other) noexcept
         : Component(std::move(other)),
-          colliders(std::move(other.colliders)), type(other.type),
-          body(other.body), bodyDirty(other.bodyDirty),
+          colliders(std::move(other.colliders)), type(other.type), properties(other.properties),
+          body(other.body), bodyDirty(other.bodyDirty), propertiesDirty(other.propertiesDirty),
           previousPosition(other.previousPosition), previousRotation(other.previousRotation),
           currentPosition(other.currentPosition), currentRotation(other.currentRotation),
           poseCount(other.poseCount) {
@@ -45,8 +46,10 @@ namespace ytail {
         Component::operator=(std::move(other));
         colliders = std::move(other.colliders);
         type = other.type;
+        properties = other.properties;
         body = other.body;
         bodyDirty = other.bodyDirty;
+        propertiesDirty = other.propertiesDirty;
         previousPosition = other.previousPosition;
         previousRotation = other.previousRotation;
         currentPosition = other.currentPosition;
@@ -73,7 +76,12 @@ namespace ytail {
             def.position = transform->getPosition();
             def.rotation = transform->getRotation();
             def.type = type;
+            def.properties = properties;
             body = PhysicsManager::get().createBody(def);
+            propertiesDirty = false;
+        } else if (propertiesDirty) {
+            PhysicsManager::get().applyBodyProperties(body, properties);
+            propertiesDirty = false;
         }
         return true;
     }
@@ -207,6 +215,24 @@ namespace ytail {
             type = static_cast<BodyType>(typeIdx);
             bodyDirty = true;
         }
+
+        ImGui::SeparatorText("Body");
+
+        bool propertiesChanged = false;
+        propertiesChanged |= ImGui::DragFloat("Friction", &properties.friction, 0.01f, 0.f, 1.f);
+        propertiesChanged |= ImGui::DragFloat("Restitution", &properties.restitution, 0.01f, 0.f, 1.f);
+        propertiesChanged |= ImGui::DragFloat("Linear Damping", &properties.linearDamping, 0.01f, 0.f, 10.f);
+        propertiesChanged |= ImGui::DragFloat("Angular Damping", &properties.angularDamping, 0.01f, 0.f, 10.f);
+        propertiesChanged |= ImGui::DragFloat("Gravity Factor", &properties.gravityFactor, 0.05f, -10.f, 10.f);
+        propertiesChanged |= ImGui::DragFloat("Max Linear Velocity", &properties.maxLinearVelocity, 1.f, 0.f, 10000.f);
+        propertiesChanged |= ImGui::DragFloat("Max Angular Velocity", &properties.maxAngularVelocity, 0.5f, 0.f, 1000.f);
+        propertiesChanged |= ImGui::Checkbox("Allow Sleeping", &properties.allowSleeping);
+        if (propertiesChanged) propertiesDirty = true;
+
+        // Mass is baked into the body's inertia tensor, so it only takes effect on a rebuild.
+        if (ImGui::DragFloat("Mass Override", &properties.overrideMass, 0.1f, 0.f, 10000.f, "%.2f (0 = from shape)"))
+            bodyDirty = true;
+        if (body != InvalidBody && type == BodyType::Dynamic) ImGui::Text("Mass: %.2f", getMass());
 
         ImGui::SeparatorText("Colliders");
 

@@ -73,6 +73,31 @@ namespace ytail::physics {
             { "rotation",    c.rotation },
         };
     }
+    inline void to_json(nlohmann::json& j, const BodyProperties& p) {
+        j = nlohmann::json{
+            { "friction",           p.friction },
+            { "restitution",        p.restitution },
+            { "linearDamping",      p.linearDamping },
+            { "angularDamping",     p.angularDamping },
+            { "gravityFactor",      p.gravityFactor },
+            { "maxLinearVelocity",  p.maxLinearVelocity },
+            { "maxAngularVelocity", p.maxAngularVelocity },
+            { "allowSleeping",      p.allowSleeping },
+            { "overrideMass",       p.overrideMass },
+        };
+    }
+    inline void from_json(const nlohmann::json& j, BodyProperties& p) {
+        if (j.contains("friction"))           j.at("friction").get_to(p.friction);
+        if (j.contains("restitution"))        j.at("restitution").get_to(p.restitution);
+        if (j.contains("linearDamping"))      j.at("linearDamping").get_to(p.linearDamping);
+        if (j.contains("angularDamping"))     j.at("angularDamping").get_to(p.angularDamping);
+        if (j.contains("gravityFactor"))      j.at("gravityFactor").get_to(p.gravityFactor);
+        if (j.contains("maxLinearVelocity"))  j.at("maxLinearVelocity").get_to(p.maxLinearVelocity);
+        if (j.contains("maxAngularVelocity")) j.at("maxAngularVelocity").get_to(p.maxAngularVelocity);
+        if (j.contains("allowSleeping"))      j.at("allowSleeping").get_to(p.allowSleeping);
+        if (j.contains("overrideMass"))       j.at("overrideMass").get_to(p.overrideMass);
+    }
+
     inline void from_json(const nlohmann::json& j, ColliderDef& c) {
         if (j.contains("shape"))       j.at("shape").get_to(c.shape);
         if (j.contains("halfExtents")) j.at("halfExtents").get_to(c.halfExtents);

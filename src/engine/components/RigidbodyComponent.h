@@ -31,6 +31,9 @@ namespace ytail {
 
         std::vector<physics::ColliderDef> colliders{ {} };
         physics::BodyType type = physics::BodyType::Dynamic;
+        physics::BodyProperties properties;
+        // Edit properties directly, then call this so the change reaches the live body.
+        void markPropertiesDirty() { propertiesDirty = true; }
         // Above this, driveTo teleports rather than deriving a velocity. Raise it for fast movers.
         float maxDrivenSpeed = 50.0f;
 
@@ -80,6 +83,7 @@ namespace ytail {
 
         physics::BodyHandle body = physics::InvalidBody;
         bool bodyDirty = false;
+        bool propertiesDirty = false;
         bool networkDriven = false;
         physics::BodyType authoredType = physics::BodyType::Dynamic;
         glm::vec3 previousPosition{0.0f};
