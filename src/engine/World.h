@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -28,6 +29,9 @@ namespace ytail {
         // Look up an entity; nullptr for deleted or unknown ids. The pointer is only safe until the next add/remove.
         [[nodiscard]] Entity* getEntity(EntityId id);
         [[nodiscard]] const Entity* getEntity(EntityId id) const;
+
+        // First entity with this name, or NULL_ENTITY. O(n)
+        [[nodiscard]] EntityId findEntityByName(std::string_view name) const;
 
         // Remove an entity, its components, and its whole subtree
         void removeEntity(EntityId id);

@@ -21,7 +21,13 @@
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyManager.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+
+#include <glm/geometric.hpp>
 
 #include "../render/JoltDebugRenderer.h"
 
@@ -323,6 +329,95 @@ namespace ytail::physics {
     void PhysicsManager::setAngularVelocity(BodyHandle handle, const glm::vec3& velocity) {
         if (handle == InvalidBody) return;
         impl->physicsSystem.GetBodyInterface().SetAngularVelocity(BodyID(handle), toJolt(velocity));
+    }
+
+    void PhysicsManager::addForce(BodyHandle handle, const glm::vec3& force) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().AddForce(BodyID(handle), toJolt(force));
+    }
+
+    void PhysicsManager::addForceAtPosition(BodyHandle handle, const glm::vec3& force,
+                                            const glm::vec3& worldPosition) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().AddForce(BodyID(handle), toJolt(force), toJolt(worldPosition));
+    }
+
+    void PhysicsManager::addTorque(BodyHandle handle, const glm::vec3& torque) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().AddTorque(BodyID(handle), toJolt(torque));
+    }
+
+    void PhysicsManager::addImpulse(BodyHandle handle, const glm::vec3& impulse) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().AddImpulse(BodyID(handle), toJolt(impulse));
+    }
+
+    void PhysicsManager::addAngularImpulse(BodyHandle handle, const glm::vec3& angularImpulse) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().AddAngularImpulse(BodyID(handle), toJolt(angularImpulse));
+    }
+
+    float PhysicsManager::getMass(BodyHandle handle) const {
+        if (handle == InvalidBody) return 0.0f;
+        const BodyLockRead lock(impl->physicsSystem.GetBodyLockInterface(), BodyID(handle));
+        if (!lock.Succeeded()) return 0.0f;
+        const Body& body = lock.GetBody();
+        if (body.IsStatic()) return 0.0f;
+        const float inverseMass = body.GetMotionProperties()->GetInverseMassUnchecked();
+        return inverseMass > 0.0f ? 1.0f / inverseMass : 0.0f;
+    }
+
+    void PhysicsManager::setLinearDamping(BodyHandle handle, float damping) {
+        if (handle == InvalidBody) return;
+        const BodyLockWrite lock(impl->physicsSystem.GetBodyLockInterface(), BodyID(handle));
+        if (!lock.Succeeded()) return;
+        Body& body = lock.GetBody();
+        if (body.IsStatic()) return;
+        body.GetMotionProperties()->SetLinearDamping(damping);
+    }
+
+    void PhysicsManager::setAngularDamping(BodyHandle handle, float damping) {
+        if (handle == InvalidBody) return;
+        const BodyLockWrite lock(impl->physicsSystem.GetBodyLockInterface(), BodyID(handle));
+        if (!lock.Succeeded()) return;
+        Body& body = lock.GetBody();
+        if (body.IsStatic()) return;
+        body.GetMotionProperties()->SetAngularDamping(damping);
+    }
+
+    void PhysicsManager::setFriction(BodyHandle handle, float friction) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().SetFriction(BodyID(handle), friction);
+    }
+
+    void PhysicsManager::setRestitution(BodyHandle handle, float restitution) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().SetRestitution(BodyID(handle), restitution);
+    }
+
+    void PhysicsManager::setGravityFactor(BodyHandle handle, float factor) {
+        if (handle == InvalidBody) return;
+        impl->physicsSystem.GetBodyInterface().SetGravityFactor(BodyID(handle), factor);
+    }
+
+    bool PhysicsManager::castRay(const glm::vec3& origin, const glm::vec3& direction, RayHit& outHit,
+                                 BodyHandle ignoreBody) const {
+        const RRayCast ray{ toJolt(origin), toJolt(direction) };
+        RayCastResult result;
+        const IgnoreSingleBodyFilter bodyFilter{ BodyID(ignoreBody) };
+        if (!impl->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, result, {}, {}, bodyFilter)) return false;
+
+        outHit.body = result.mBodyID.GetIndexAndSequenceNumber();
+        outHit.position = toGlm(ray.GetPointOnRay(result.mFraction));
+        outHit.distance = result.mFraction * glm::length(direction);
+
+        // The surface normal has to come off the body itself, since the result only carries the
+        // sub-shape that was hit.
+        const BodyLockRead lock(impl->physicsSystem.GetBodyLockInterface(), result.mBodyID);
+        outHit.normal = lock.Succeeded()
+            ? toGlm(lock.GetBody().GetWorldSpaceSurfaceNormal(result.mSubShapeID2, toJolt(outHit.position)))
+            : glm::vec3(0.0f);
+        return true;
     }
 
     void PhysicsManager::debugDraw() {

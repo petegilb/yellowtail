@@ -62,6 +62,13 @@ namespace ytail {
         return const_cast<World*>(this)->getEntity(id);
     }
 
+    EntityId World::findEntityByName(const std::string_view name) const {
+        for (const Entity& entity : dense) {
+            if (entity.getName() == name) return entity.getId();
+        }
+        return NULL_ENTITY;
+    }
+
     void World::unlinkFromParent(const Entity* child) {
         Entity* parent = getEntity(child->parentId);
         if (parent == nullptr) return;

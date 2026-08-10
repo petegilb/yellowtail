@@ -43,6 +43,24 @@ namespace ytail {
         [[nodiscard]] bool isNetworkDriven() const { return networkDriven; }
         void driveTo(const glm::vec3& position, const glm::quat& rotation, float deltaTime);
 
+        // Forwarded to the body, and no-ops until it exists (first fixedTick). Forces and torques
+        // are consumed by the next step, so apply them from fixedTick, not tick.
+        void addForce(const glm::vec3& force);
+        void addForceAtPosition(const glm::vec3& force, const glm::vec3& worldPosition);
+        void addTorque(const glm::vec3& torque);
+        void addImpulse(const glm::vec3& impulse);
+        void addAngularImpulse(const glm::vec3& angularImpulse);
+
+        [[nodiscard]] glm::vec3 getLinearVelocity() const;
+        void setLinearVelocity(const glm::vec3& velocity);
+        [[nodiscard]] glm::vec3 getAngularVelocity() const;
+        void setAngularVelocity(const glm::vec3& velocity);
+        [[nodiscard]] float getMass() const;
+
+        // For the parts of PhysicsManager this doesn't wrap (damping, friction, ray filtering).
+        // InvalidBody until the first fixedTick, and it changes when an inspector edit rebuilds.
+        [[nodiscard]] physics::BodyHandle getBody() const { return body; }
+
         // The last two simulated poses. Rendering blends between them so motion stays smooth when
         // the frame rate and the fixed step disagree.
         [[nodiscard]] bool hasInterpolatedPose() const { return poseCount >= 2; }

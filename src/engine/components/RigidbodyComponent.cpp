@@ -151,6 +151,46 @@ namespace ytail {
         PhysicsManager::get().moveKinematic(body, position, rotation, deltaTime);
     }
 
+    void RigidbodyComponent::addForce(const glm::vec3& force) {
+        PhysicsManager::get().addForce(body, force);
+    }
+
+    void RigidbodyComponent::addForceAtPosition(const glm::vec3& force, const glm::vec3& worldPosition) {
+        PhysicsManager::get().addForceAtPosition(body, force, worldPosition);
+    }
+
+    void RigidbodyComponent::addTorque(const glm::vec3& torque) {
+        PhysicsManager::get().addTorque(body, torque);
+    }
+
+    void RigidbodyComponent::addImpulse(const glm::vec3& impulse) {
+        PhysicsManager::get().addImpulse(body, impulse);
+    }
+
+    void RigidbodyComponent::addAngularImpulse(const glm::vec3& angularImpulse) {
+        PhysicsManager::get().addAngularImpulse(body, angularImpulse);
+    }
+
+    glm::vec3 RigidbodyComponent::getLinearVelocity() const {
+        return PhysicsManager::get().getLinearVelocity(body);
+    }
+
+    void RigidbodyComponent::setLinearVelocity(const glm::vec3& velocity) {
+        PhysicsManager::get().setLinearVelocity(body, velocity);
+    }
+
+    glm::vec3 RigidbodyComponent::getAngularVelocity() const {
+        return PhysicsManager::get().getAngularVelocity(body);
+    }
+
+    void RigidbodyComponent::setAngularVelocity(const glm::vec3& velocity) {
+        PhysicsManager::get().setAngularVelocity(body, velocity);
+    }
+
+    float RigidbodyComponent::getMass() const {
+        return PhysicsManager::get().getMass(body);
+    }
+
     void RigidbodyComponent::setColliderTransform(size_t index, const glm::vec3 &offset, const glm::quat &rotation) {
         if (index >= colliders.size()) return;
         colliders[index].offset = offset;
