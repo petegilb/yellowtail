@@ -87,22 +87,26 @@ namespace ytail
         SDL_Log("Copied scene to the game build: %s", destination.string().c_str());
     }
 
-    void Editor::launchLocalMultiplayer(int instanceCount) {
+    void Editor::launchLocalMultiplayer(int instanceCount, const NetSimSettings& netSim) {
         if (gameExecutable.empty() || instanceCount < 1) return;
 
         mirrorSceneToGame();
 
+        const std::vector<std::string> netSimArgs = netSimToArgs(netSim);
+
         for (int i = 0; i < instanceCount; ++i) {
             const std::string indexArg = std::to_string(i);
             // Instance 0 hosts on the local port; the rest connect to it.
-            const char* const args[] = {
+            std::vector<const char*> args = {
                 gameExecutable.c_str(),
                 "local",
                 i == 0 ? "host" : "connect",
                 "--window-index", indexArg.c_str(),
-                nullptr
             };
-            SDL_Process* process = SDL_CreateProcess(args, false);
+            for (const std::string& arg : netSimArgs) args.push_back(arg.c_str());
+            args.push_back(nullptr);
+
+            SDL_Process* process = SDL_CreateProcess(args.data(), false);
             if (process == nullptr) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to launch %s: %s",
                              gameExecutable.c_str(), SDL_GetError());

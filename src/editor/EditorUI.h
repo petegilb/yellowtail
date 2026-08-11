@@ -17,6 +17,7 @@
 #include "imgui.h"
 #include "imguizmo/ImGuizmo.h"
 
+#include "engine/NetSimSettings.h"
 #include "engine/render/Material.h"
 
 namespace ytail {
@@ -67,6 +68,8 @@ namespace ytail {
         void drawInspector();
         void drawSaveAsDialog();
         void drawMultiplayerTest();
+        // Fake lag/jitter/loss sliders inside the Game Test panel, applied to launched instances.
+        void drawNetSimSettings();
 
         // one entity row in the outliner tree, recursing into its children. Takes an id: actions
         // inside (Duplicate) can move entities in memory, so no Entity* survives the call.
@@ -121,8 +124,9 @@ namespace ytail {
         bool openSaveAsRequested = false;
         std::string saveAsName;
 
-        // Local multiplayer test launcher: number of instances to spawn.
+        // Local multiplayer test launcher: number of instances to spawn + the conditions they run under.
         int multiplayerInstanceCount = 2;
+        NetSimSettings multiplayerNetSim;
     };
 } // ytail
 

@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "engine/NetSimSettings.h"
+
 // The networking interfaces are provided by the app's backend (Steam or GameNetworkingSockets)
 class ISteamNetworkingSockets;
 class ISteamNetworkingUtils;
@@ -45,6 +47,11 @@ namespace ytail::net {
         // Direct-IP variants for local testing (loopback / LAN): no relay, no second Steam account.
         bool startHostIP(uint16_t port);
         bool connectToIP(uint16_t port);
+
+        // Fake lag/jitter/loss for local testing. Global to the process and applied to sends, so a
+        // round trip between two instances sees each one's lag once. Call any time after bind().
+        void applyNetSim(const NetSimSettings& settings);
+        [[nodiscard]] const NetSimSettings& getNetSim() const { return netSim; }
 
         // Receive and dispatch pending messages. Call once per frame after backend callbacks run.
         void poll();
@@ -84,6 +91,8 @@ namespace ytail::net {
 
         // Steam handle values. HSteamNetConnection / HSteamListenSocket / HSteamNetPollGroup are all
         // uint32, and 0 is the invalid sentinel for each.
+        NetSimSettings netSim;
+
         std::vector<uint32_t> connections;
         uint32_t listenSocket = 0;
         uint32_t pollGroup = 0;

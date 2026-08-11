@@ -14,6 +14,7 @@
 #include <nlohmann/json_fwd.hpp>
 
 #include "engine/Application.h"
+#include "engine/NetSimSettings.h"
 #include "EditorUI.h"
 
 namespace ytail
@@ -57,7 +58,8 @@ namespace ytail
         void setGameExecutable(const std::string& path) { gameExecutable = path; }
         [[nodiscard]] bool canLaunchMultiplayer() const { return !gameExecutable.empty(); }
         // Spawn instanceCount local game processes: instance 0 hosts, the rest connect to it.
-        void launchLocalMultiplayer(int instanceCount);
+        // Every instance gets the same simulated network conditions.
+        void launchLocalMultiplayer(int instanceCount, const NetSimSettings& netSim = {});
         // Write the live scene into the game build's assets, so launching sees editor edits.
         void mirrorSceneToGame() const;
         // Kill every instance we spawned. Also runs from the destructor.

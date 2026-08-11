@@ -49,6 +49,27 @@ namespace ytail::net {
             });
     }
 
+    void NetPeer::applyNetSim(const NetSimSettings& settings) {
+        if (utils == nullptr) return;
+        netSim = settings;
+
+        utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, settings.lagMs);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Avg, settings.jitterMs);
+        // Cap the tail of the exponential distribution so a stray sample can't stall for seconds.
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Max, settings.jitterMs * 3.0f);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, settings.jitterPct);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, settings.lossPct);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketReorder_Send, settings.reorderPct);
+        utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketReorder_Time, settings.reorderTimeMs);
+
+        if (settings.isActive()) {
+            SDL_Log("Simulating network conditions: %dms lag, %.0fms jitter (%.0f%%), %.1f%% loss, "
+                    "%.1f%% reorder (+%dms).",
+                    settings.lagMs, settings.jitterMs, settings.jitterPct, settings.lossPct,
+                    settings.reorderPct, settings.reorderTimeMs);
+        }
+    }
+
     bool NetPeer::startHost() {
         if (sockets == nullptr) return false;
 
@@ -234,6 +255,12 @@ namespace ytail::net {
 
         ImGui::Text("Mode: %s", hosting ? "Host" : "Client");
         ImGui::Text("Connections: %d", static_cast<int>(connections.size()));
+        // Ping here includes the fake lag, so say when it's being simulated.
+        if (netSim.isActive()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                               "Simulated: %dms lag, %.0fms jitter, %.1f%% loss (outbound)",
+                               netSim.lagMs, netSim.jitterMs, netSim.lossPct);
+        }
         for (const uint32_t connection : connections) {
             char identity[128] = "?";
             char address[64] = "?";

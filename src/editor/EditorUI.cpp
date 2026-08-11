@@ -839,6 +839,29 @@ namespace ytail
         }
     }
 
+    void EditorUI::drawNetSimSettings() {
+        if (!ImGui::CollapsingHeader("Network Simulation")) return;
+
+        // Both ends delay their own sends, so a round trip costs the lag twice.
+        ImGui::TextWrapped("Applied to every instance launched below. Lag is one-way, so expect a "
+                           "reported ping near %dms.", multiplayerNetSim.lagMs * 2);
+
+        if (ImGui::Button("None")) multiplayerNetSim = NetSimSettings{};
+        ImGui::SameLine();
+        if (ImGui::Button("Good")) multiplayerNetSim = NetSimSettings{25, 5.0f, 100.0f, 0.5f, 0.0f, 15};
+        ImGui::SameLine();
+        if (ImGui::Button("Poor")) multiplayerNetSim = NetSimSettings{75, 20.0f, 100.0f, 3.0f, 1.0f, 15};
+        ImGui::SameLine();
+        if (ImGui::Button("Awful")) multiplayerNetSim = NetSimSettings{200, 60.0f, 100.0f, 10.0f, 5.0f, 40};
+
+        ImGui::SliderInt("Lag (ms)", &multiplayerNetSim.lagMs, 0, 500);
+        ImGui::SliderFloat("Jitter (ms)", &multiplayerNetSim.jitterMs, 0.0f, 200.0f, "%.0f");
+        ImGui::SliderFloat("Jitter chance (%)", &multiplayerNetSim.jitterPct, 0.0f, 100.0f, "%.0f");
+        ImGui::SliderFloat("Packet loss (%)", &multiplayerNetSim.lossPct, 0.0f, 25.0f, "%.1f");
+        ImGui::SliderFloat("Reorder (%)", &multiplayerNetSim.reorderPct, 0.0f, 25.0f, "%.1f");
+        ImGui::SliderInt("Reorder delay (ms)", &multiplayerNetSim.reorderTimeMs, 0, 200);
+    }
+
     void EditorUI::drawMultiplayerTest() {
         if (!ImGui::Begin("Game Test")) {
             ImGui::End();
@@ -854,8 +877,11 @@ namespace ytail
         ImGui::TextWrapped("Launch local instances that connect over 127.0.0.1. "
                            "Instance 0 hosts, the rest join.");
         ImGui::SliderInt("Instances", &multiplayerInstanceCount, 1, 8);
+
+        drawNetSimSettings();
+
         if (ImGui::Button("Launch")) {
-            editor->launchLocalMultiplayer(multiplayerInstanceCount);
+            editor->launchLocalMultiplayer(multiplayerInstanceCount, multiplayerNetSim);
         }
 
         const int running = editor->getRunningInstanceCount();
