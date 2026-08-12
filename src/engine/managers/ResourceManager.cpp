@@ -3,6 +3,7 @@
 //
 
 #include "ResourceManager.h"
+#include <filesystem>
 #include <fstream>
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_shadercross/SDL_shadercross.h>
@@ -37,6 +38,19 @@ namespace ytail {
 
         initializeSamplers();
         initializePipelines();
+    }
+
+    std::string ResourceManager::resolveAssetPath(const std::string& path) const {
+        if (!assetSourceRoot.empty()) {
+            std::string sourcePath = assetSourceRoot + path;
+            if (std::filesystem::exists(sourcePath)) return sourcePath;
+        }
+        return std::string(BasePath) + "assets/" + path;
+    }
+
+    std::string ResourceManager::resolveAssetSavePath(const std::string& path) const {
+        if (!assetSourceRoot.empty()) return assetSourceRoot + path;
+        return std::string(BasePath) + "assets/" + path;
     }
 
     std::shared_ptr<Texture> ResourceManager::getTexture(const std::string &path, bool srgb) {

@@ -15,6 +15,7 @@
 #include "engine/components/TransformComponent.h"
 #include "engine/components/CameraComponent.h"
 #include "engine/components/FreeMovementComponent.h"
+#include "engine/managers/ResourceManager.h"
 #include "engine/serialize/SceneSerializer.h"
 
 #include <nlohmann/json.hpp>
@@ -125,6 +126,10 @@ namespace ytail
         engine->showLightGizmos = true;
         engine->showEditorIcons = true;
         engine->showShadows = true;
+
+#ifdef YT_EDITOR_SOURCE_ASSETS_DIR
+        engine->getResourceManager()->setAssetSourceRoot(YT_EDITOR_SOURCE_ASSETS_DIR);
+#endif
 
         loadScene(*engine, currentScenePath);
         createEditorCamera();

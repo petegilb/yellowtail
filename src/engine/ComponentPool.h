@@ -26,6 +26,8 @@ namespace ytail {
     template<typename T>
     inline constexpr bool overridesTick = !std::is_same_v<decltype(&T::tick), void (Component::*)(float)>;
     template<typename T>
+    inline constexpr bool overridesFixedPreTick = !std::is_same_v<decltype(&T::fixedPreTick), void (Component::*)(float)>;
+    template<typename T>
     inline constexpr bool overridesFixedTick = !std::is_same_v<decltype(&T::fixedTick), void (Component::*)(float)>;
     template<typename T>
     inline constexpr bool overridesEventTick = !std::is_same_v<decltype(&T::eventTick), void (Component::*)(const SDL_Event&)>;
@@ -37,6 +39,7 @@ namespace ytail {
         virtual void remove(EntityId id) = 0;
         [[nodiscard]] virtual bool has(EntityId id) const = 0;
         virtual void clear() = 0;
+        virtual void fixedPreTickAll(float deltaTime) = 0;
         virtual void fixedTickAll(float deltaTime) = 0;
         virtual void tickAll(float deltaTime) = 0;
         virtual void eventTickAll(const SDL_Event& event) = 0;
@@ -94,6 +97,11 @@ namespace ytail {
             sparse.clear();
         }
 
+        void fixedPreTickAll(const float deltaTime) override {
+            if constexpr (overridesFixedPreTick<T>) {
+                for (T& comp : dense) comp.fixedPreTick(deltaTime);
+            }
+        }
         void fixedTickAll(const float deltaTime) override {
             if constexpr (overridesFixedTick<T>) {
                 for (T& comp : dense) comp.fixedTick(deltaTime);

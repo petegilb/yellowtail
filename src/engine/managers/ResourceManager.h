@@ -57,15 +57,20 @@ public:
         // Sampleable depth format for the shadow map (rendered to, then sampled by the lit shader).
         [[nodiscard]] SDL_GPUTextureFormat getShadowMapFormat() const { return shadowMapFormat; }
 
-        // Turn an assets-relative path into an absolute path next to the executable.
-        [[nodiscard]] std::string resolveAssetPath(const std::string& path) const {
-            return std::string(BasePath) + "assets/" + path;
-        }
+        // Absolute path to read from: the source tree when it has the file, else next to the exe.
+        [[nodiscard]] std::string resolveAssetPath(const std::string& path) const;
+        // Absolute path to write to, so a save reaches the repo instead of the build copy.
+        [[nodiscard]] std::string resolveAssetSavePath(const std::string& path) const;
+
+        // Set by the editor to the project's assets/. Engine shaders and icons only ever exist in
+        // the copy beside the exe, so this is a search order rather than a replacement.
+        void setAssetSourceRoot(const std::string& root) { assetSourceRoot = root; }
 
     private:
         SDL_GPUDevice* device = nullptr;
         SDL_Window* window = nullptr;
         const char* BasePath;
+        std::string assetSourceRoot;
 
         // Set in the constructor to a device-supported depth+stencil format (stencil is
         // required for the outline mask). Prefers D24_S8, falls back to D32_S8.

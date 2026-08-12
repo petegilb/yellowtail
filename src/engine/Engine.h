@@ -5,6 +5,7 @@
 #ifndef YELLOWTAIL_ENGINE_H
 #define YELLOWTAIL_ENGINE_H
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -63,10 +64,19 @@ namespace ytail {
         // in tick(), so it runs 0..N times per frame with a constant dt.
         void fixedTick(float deltaTime);
 
+        // The simulation half of a fixed step, run for a named tick so a network resimulation can
+        // replay past ticks through exactly the same path the live one takes.
+        void simulateStep(Uint64 tick, float deltaTime);
+
         void updateTick();
 
         // alpha is the fraction (0..1) into the next fixed step, for interpolating rendered state.
         int renderTick(float alpha);
+
+        // The alpha the last frame was actually drawn with. Anything that needs to know where a
+        // body appeared on screen, rather than where the simulation left it, has to interpolate
+        // with this one.
+        [[nodiscard]] float getRenderAlpha() const { return renderAlpha; }
 
         // set the play state of the engine (i.e. paused or simulating)
         void setPlayState(PlayState newState) {playState = newState;}
@@ -75,6 +85,16 @@ namespace ytail {
 
         // count of fixed steps run. The backbone for networking (tag state/inputs by tick).
         [[nodiscard]] Uint64 getTickNumber() const { return tickNumber; }
+        // Adopt the host's numbering when joining a session.
+        void setTickNumber(const Uint64 tick) { tickNumber = tick; }
+        // Run one extra fixed step this frame, or one fewer, to slide along the shared timeline.
+        // Never stretches FIXED_DT: a step must not depend on when it ran. Floored the same way tick
+        // caps it above, since an unbounded negative leaves the simulation frozen until real time
+        // catches back up with it.
+        void adjustClock(const int ticks) {
+            fixedAccumulator = std::max(fixedAccumulator + static_cast<float>(ticks) * FIXED_DT,
+                                        -MAX_ACCUMULATOR);
+        }
 
 #if YELLOWTAIL_WITH_NETWORKING
         [[nodiscard]] net::ReplicationManager& getReplication() { return replication; }
@@ -238,6 +258,7 @@ namespace ytail {
 
         // Fixed-step simulation state. Leftover time carried between frames, the running fixed-step count
         float fixedAccumulator = 0.0f;
+        float renderAlpha = 0.0f;
         Uint64 tickNumber = 0;
         PlayState playState = PlayState::Simulating;
 

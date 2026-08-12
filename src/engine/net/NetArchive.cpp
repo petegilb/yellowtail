@@ -14,9 +14,6 @@
 
 namespace ytail::net {
     namespace {
-        // might need to tune this depending on how much positions change when a Jolt body is at rest
-        // so delta compression doesn't fire when it doesn't need to
-        constexpr float PositionUnitsPerMeter = 512.0f;
         // Any component that is not the largest is bounded by 1/sqrt(2): if |b| <= |a| and
         // a^2 + b^2 <= 1 then 2b^2 <= 1. So the three we keep always fit this range.
         constexpr float SmallestThreeRange = 0.70710678f;
@@ -81,20 +78,40 @@ namespace ytail::net {
         }
     }
 
-    QuantizedPose quantizePose(const glm::vec3& position, const glm::quat& rotation) {
-        QuantizedPose pose;
-        for (int axis = 0; axis < 3; ++axis) {
-            pose.position[axis] = static_cast<int32_t>(std::lround(position[axis] * PositionUnitsPerMeter));
+    namespace {
+        int32_t quantizeAxis(const float value, const float unitsPerUnit,
+                             const int32_t min, const int32_t max) {
+            const long rounded = std::lround(value * unitsPerUnit);
+            return static_cast<int32_t>(std::clamp<long>(rounded, min, max));
         }
-        pose.rotation = packRotation(rotation);
-        return pose;
     }
 
-    void dequantizePose(const QuantizedPose& pose, glm::vec3& outPosition, glm::quat& outRotation) {
+    QuantizedState quantizeState(const glm::vec3& position, const glm::quat& rotation,
+                                 const glm::vec3& linear, const glm::vec3& angular, const bool atRest) {
+        QuantizedState state;
         for (int axis = 0; axis < 3; ++axis) {
-            outPosition[axis] = static_cast<float>(pose.position[axis]) / PositionUnitsPerMeter;
+            state.position[axis] = quantizeAxis(position[axis], PositionUnitsPerMeter, PositionMin, PositionMax);
         }
-        outRotation = unpackRotation(pose.rotation);
+        state.rotation = packRotation(rotation);
+        state.atRest = atRest;
+        // Left at zero when at rest, so two settled bodies compare equal and stay off the wire.
+        if (!atRest) {
+            for (int axis = 0; axis < 3; ++axis) {
+                state.linear[axis] = quantizeAxis(linear[axis], LinearUnitsPerMeterPerSecond, LinearMin, LinearMax);
+                state.angular[axis] = quantizeAxis(angular[axis], AngularUnitsPerRadianPerSecond, AngularMin, AngularMax);
+            }
+        }
+        return state;
+    }
+
+    void dequantizeState(const QuantizedState& state, glm::vec3& outPosition, glm::quat& outRotation,
+                         glm::vec3& outLinear, glm::vec3& outAngular) {
+        for (int axis = 0; axis < 3; ++axis) {
+            outPosition[axis] = static_cast<float>(state.position[axis]) / PositionUnitsPerMeter;
+            outLinear[axis] = static_cast<float>(state.linear[axis]) / LinearUnitsPerMeterPerSecond;
+            outAngular[axis] = static_cast<float>(state.angular[axis]) / AngularUnitsPerRadianPerSecond;
+        }
+        outRotation = unpackRotation(state.rotation);
     }
 
     BitWriter::BitWriter(uint32_t* inWords, const int wordCount)
@@ -126,21 +143,12 @@ namespace ytail::net {
 
     void BitWriter::writeBool(const bool value) { writeBits(value ? 1u : 0u, 1); }
 
-    void BitWriter::writeUInt32(const uint32_t value) { writeBits(value, 32); }
-
-    void BitWriter::writeInt32(const int32_t value) { writeBits(static_cast<uint32_t>(value), 32); }
-
     void BitWriter::writeVarUInt(uint32_t value) {
         do {
             const uint32_t chunk = value & 0x7Fu;
             value >>= 7;
             writeBits(chunk | (value != 0 ? 0x80u : 0u), 8);
         } while (value != 0);
-    }
-
-    void BitWriter::writePose(const QuantizedPose& pose) {
-        for (const int32_t axis : pose.position) writeInt32(axis);
-        writeUInt32(pose.rotation);
     }
 
     void BitWriter::serializeInt(int32_t& value, const int32_t min, const int32_t max) {
@@ -181,10 +189,6 @@ namespace ytail::net {
 
     bool BitReader::readBool() { return readBits(1) != 0; }
 
-    uint32_t BitReader::readUInt32() { return readBits(32); }
-
-    int32_t BitReader::readInt32() { return static_cast<int32_t>(readBits(32)); }
-
     uint32_t BitReader::readVarUInt() {
         uint32_t value = 0;
         for (int shift = 0; shift < 35; shift += 7) {
@@ -194,13 +198,6 @@ namespace ytail::net {
             if ((chunk & 0x80u) == 0) break;
         }
         return value;
-    }
-
-    QuantizedPose BitReader::readPose() {
-        QuantizedPose pose;
-        for (int32_t& axis : pose.position) axis = readInt32();
-        pose.rotation = readUInt32();
-        return pose;
     }
 
     void BitReader::serializeInt(int32_t& value, const int32_t min, const int32_t max) {

@@ -28,6 +28,9 @@ namespace ytail {
         virtual void eventTick(const SDL_Event& event) {}
 
         // Fixed timestep, runs 0..N times per frame with a constant dt
+        // Before the physics step, so forces applied here are consumed by it.
+        virtual void fixedPreTick(float deltaTime) {}
+
         virtual void fixedTick(float deltaTime) {}
 
         virtual void tick(float deltaTime) {}

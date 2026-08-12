@@ -237,6 +237,13 @@ namespace ytail::net {
         for (const uint32_t connection : connections) sendReliable(connection, data, size);
     }
 
+    int NetPeer::getPingMs(const uint32_t connection) const {
+        if (sockets == nullptr || connection == 0) return -1;
+        SteamNetConnectionRealTimeStatus_t status{};
+        if (sockets->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) != k_EResultOK) return -1;
+        return status.m_nPing;
+    }
+
     // Nagle holds a partly-filled packet briefly so following messages can share it. That grouping
     // is worth having, but the last message of a tick has nothing to wait for, so flush once the
     // tick's sends are queued.

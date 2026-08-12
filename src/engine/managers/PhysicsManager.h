@@ -79,8 +79,6 @@ namespace ytail::physics {
 
         // changes motion type in place, keeping the body's velocity and BodyID
         void setBodyMotionType(BodyHandle handle, BodyType type);
-        // moves a kinematic body toward a target so Jolt derives a velocity from it (setBodyTransform teleports)
-        void moveKinematic(BodyHandle handle, const glm::vec3& position, const glm::quat& rotation, float deltaTime);
         [[nodiscard]] glm::vec3 getLinearVelocity(BodyHandle handle) const;
         void setLinearVelocity(BodyHandle handle, const glm::vec3& velocity);
         [[nodiscard]] glm::vec3 getAngularVelocity(BodyHandle handle) const;
@@ -94,6 +92,9 @@ namespace ytail::physics {
         void addTorque(BodyHandle handle, const glm::vec3& torque);
         void addImpulse(BodyHandle handle, const glm::vec3& impulse);
         void addAngularImpulse(BodyHandle handle, const glm::vec3& angularImpulse);
+
+        // False once Jolt has put the body to sleep. Replication uses it to stop sending settled bodies.
+        [[nodiscard]] bool isBodyActive(BodyHandle handle) const;
 
         // 0 for static and kinematic bodies, which Jolt treats as infinitely heavy.
         [[nodiscard]] float getMass(BodyHandle handle) const;
@@ -110,6 +111,19 @@ namespace ytail::physics {
         // one body, usually the caster's own. Returns false and leaves outHit alone on a miss.
         bool castRay(const glm::vec3& origin, const glm::vec3& direction, RayHit& outHit,
                      BodyHandle ignoreBody = InvalidBody) const;
+
+        // Contact state only, for replaying steps after a network correction. The solver carries
+        // which bodies are touching and the push it applied last step from tick to tick, and none of
+        // that is in a network snapshot. A replay that starts without it re-solves every contact
+        // from scratch and lands somewhere the original run never went, which for anything resting
+        // on something else is every step.
+        //
+        // Body poses are deliberately not saved: the snapshot being replayed from supplies those.
+        // Restoring is only valid while the body set is unchanged, since a rebuilt body takes a new
+        // id and invalidates every slot.
+        static constexpr int MaxSavedContacts = 64;
+        void saveContacts(int slot);
+        void restoreContacts(int slot);
 
         // generate debug wireframe so we can draw it in the renderer
         void debugDraw();

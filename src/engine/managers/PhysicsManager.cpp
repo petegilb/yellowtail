@@ -15,6 +15,7 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/StateRecorderImpl.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -34,6 +35,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdarg>
 #include <cstdio>
 #include <thread>
@@ -178,6 +180,9 @@ namespace ytail::physics {
         PhysicsSystem physicsSystem;
 
         JoltDebugRenderer debugRenderer;
+
+        // Reused rather than reallocated: one of these is written every fixed tick.
+        std::array<StateRecorderImpl, PhysicsManager::MaxSavedContacts> savedContacts;
     };
 
     PhysicsManager& PhysicsManager::get() {
@@ -320,13 +325,6 @@ namespace ytail::physics {
         bodyInterface.SetObjectLayer(id, movable ? Layers::MOVING : Layers::NON_MOVING);
     }
 
-    void PhysicsManager::moveKinematic(BodyHandle handle, const glm::vec3& position,
-                                       const glm::quat& rotation, float deltaTime) {
-        if (handle == InvalidBody) return;
-        impl->physicsSystem.GetBodyInterface().MoveKinematic(
-            BodyID(handle), toJolt(position), toJolt(rotation), deltaTime);
-    }
-
     glm::vec3 PhysicsManager::getLinearVelocity(BodyHandle handle) const {
         if (handle == InvalidBody) return glm::vec3(0.0f);
         return toGlm(impl->physicsSystem.GetBodyInterface().GetLinearVelocity(BodyID(handle)));
@@ -371,6 +369,11 @@ namespace ytail::physics {
     void PhysicsManager::addAngularImpulse(BodyHandle handle, const glm::vec3& angularImpulse) {
         if (handle == InvalidBody) return;
         impl->physicsSystem.GetBodyInterface().AddAngularImpulse(BodyID(handle), toJolt(angularImpulse));
+    }
+
+    bool PhysicsManager::isBodyActive(BodyHandle handle) const {
+        if (handle == InvalidBody) return false;
+        return impl->physicsSystem.GetBodyInterface().IsActive(BodyID(handle));
     }
 
     float PhysicsManager::getMass(BodyHandle handle) const {
@@ -452,6 +455,22 @@ namespace ytail::physics {
             ? toGlm(lock.GetBody().GetWorldSpaceSurfaceNormal(result.mSubShapeID2, toJolt(outHit.position)))
             : glm::vec3(0.0f);
         return true;
+    }
+
+    void PhysicsManager::saveContacts(const int slot) {
+        if (slot < 0 || slot >= MaxSavedContacts) return;
+        StateRecorderImpl& recorder = impl->savedContacts[slot];
+        recorder.Clear();
+        impl->physicsSystem.SaveState(recorder, EStateRecorderState::Contacts);
+    }
+
+    void PhysicsManager::restoreContacts(const int slot) {
+        if (slot < 0 || slot >= MaxSavedContacts) return;
+        StateRecorderImpl& recorder = impl->savedContacts[slot];
+        if (recorder.GetDataSize() == 0) return;
+        // Rewound every time, so one slot can be restored more than once.
+        recorder.Rewind();
+        impl->physicsSystem.RestoreState(recorder);
     }
 
     void PhysicsManager::debugDraw() {

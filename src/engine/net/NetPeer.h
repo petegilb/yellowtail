@@ -23,9 +23,9 @@ namespace ytail::net {
     // Values from GameFirst up are the game's to define; the engine forwards them uninterpreted.
     enum class NetMessageType : uint8_t {
         Snapshot = 1,
-        ClientState = 2,
+        ClientInput = 2,
         Welcome = 3,
-        RequestOwnership = 4,
+        PeerInput = 4,
         GameFirst = 128,
     };
 
@@ -68,6 +68,9 @@ namespace ytail::net {
         void flush();
 
         [[nodiscard]] const std::vector<uint32_t>& getConnections() const { return connections; }
+
+        // Round trip time in milliseconds, or -1 if the backend has no estimate yet
+        [[nodiscard]] int getPingMs(uint32_t connection) const;
 
         [[nodiscard]] bool isActive() const { return active; }
         [[nodiscard]] bool isHosting() const { return hosting; }

@@ -89,6 +89,7 @@ namespace ytail {
         void each(Func&& func) const;
 
         // Tick every component, one pool at a time -> Deferred commands run after each pass.
+        void fixedPreTickAll(float deltaTime);
         void fixedTickAll(float deltaTime);
         void tickAll(float deltaTime);
         void eventTickAll(const SDL_Event& event);

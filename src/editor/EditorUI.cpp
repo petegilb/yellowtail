@@ -407,9 +407,14 @@ namespace ytail
         root["textures"] = texturesJson;
         root["uniform"] = materialDef.uniform;
 
-        std::ofstream file(engine->getResourceManager()->resolveAssetPath(materialPath));
+        const std::string savePath = engine->getResourceManager()->resolveAssetSavePath(materialPath);
+        // A new material's folder may not exist yet, and ofstream won't make one.
+        std::error_code error;
+        std::filesystem::create_directories(std::filesystem::path(savePath).parent_path(), error);
+
+        std::ofstream file(savePath);
         if (!file.is_open()) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not write material %s", materialPath.c_str());
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not write material %s", savePath.c_str());
             return;
         }
         file << root.dump(2);
@@ -419,9 +424,10 @@ namespace ytail
     }
 
     void EditorUI::loadMaterialDef() {
-        std::ifstream file(engine->getResourceManager()->resolveAssetPath(materialPath));
+        const std::string loadPath = engine->getResourceManager()->resolveAssetPath(materialPath);
+        std::ifstream file(loadPath);
         if (!file.is_open()) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not open material %s", materialPath.c_str());
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not open material %s", loadPath.c_str());
             return;
         }
         nlohmann::json root;

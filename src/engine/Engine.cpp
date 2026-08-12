@@ -219,7 +219,26 @@ namespace ytail {
         // Fraction into the next fixed step, so render can interpolate between the last two sim states.
         // Clamped because a paused engine never drains the accumulator.
         const float alpha = std::clamp(fixedAccumulator / FIXED_DT, 0.0f, 1.0f);
+        renderAlpha = alpha;
         renderTick(alpha);
+    }
+    
+    void Engine::simulateStep(const Uint64 tick, const float deltaTime) {
+        ZoneScoped;
+        // Components look up the input belonging to the step they are running, so a replay has to
+        // present the tick it is replaying rather than the one we have really reached.
+        const Uint64 resumeTick = tickNumber;
+        tickNumber = tick;
+        // Input and forces first, so the step that follows is the one that consumes them.
+        if (app) app->fixedPreTick(deltaTime);
+        world.fixedPreTickAll(deltaTime);
+        {
+            ZoneScopedN("Physics step");
+            physics::PhysicsManager::get().step(deltaTime);
+        }
+        if (app) app->fixedTick(deltaTime);
+        world.fixedTickAll(deltaTime);
+        tickNumber = resumeTick;
     }
 
     void Engine::fixedTick(float deltaTime) {
@@ -227,13 +246,7 @@ namespace ytail {
 #if YELLOWTAIL_WITH_NETWORKING
         replication.applyReceived(tickNumber);
 #endif
-        // engine (physics), then app, then components.
-        {
-            ZoneScopedN("Physics step");
-            physics::PhysicsManager::get().step(deltaTime);
-        }
-        if (app) app->fixedTick(deltaTime);
-        world.fixedTickAll(deltaTime);
+        simulateStep(tickNumber, deltaTime);
 
         // TODO get all networked entities
         // create snapshots for that entity by getting all of its components and calling
@@ -483,6 +496,10 @@ namespace ytail {
         // Both calls are requests the window manager may defer, which on macOS leaves the windows
         // stacked at their default position.
         SDL_SyncWindow(window);
+        // macOS ignores an activation request from a process the editor spawned, so ordering these
+        // above the editor takes the floating window level rather than a raise.
+        SDL_SetWindowAlwaysOnTop(window, true);
+        SDL_RaiseWindow(window);
     }
 
     void Engine::setTargetDisplay(const SDL_DisplayID display) {
@@ -641,7 +658,7 @@ namespace ytail {
             gizmoDraw.clear();
             if (showLightGizmos) buildLightGizmos(gizmoDraw, world, selectedEntity);
 #if YELLOWTAIL_WITH_NETWORKING
-            replication.drawSnapshotGhosts(gizmoDraw);
+            replication.drawNetDebug(gizmoDraw);
 #endif
             if (!gizmoDraw.empty()) gizmoLineRenderer->upload(commandBuffer, gizmoDraw.vertices());
         }

@@ -27,6 +27,10 @@ public:
         Component(Component&&) = default;
         Component& operator=(Component&&) = default;
 
+        // Before the physics step: where input is read and forces are applied
+        virtual void fixedPreTick(float deltaTime) {}
+
+        // After the physics step, for reading results back out of the simulation.
         virtual void fixedTick(float deltaTime) {}
 
         virtual void tick(float deltaTime) {}

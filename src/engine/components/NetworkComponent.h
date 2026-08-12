@@ -10,18 +10,14 @@
 #include "../Component.h"
 
 namespace ytail {
-    enum class NetAuthority : uint8_t { Host, Owner, Remote };
-
     // Marks an entity for replication. Both ids are assigned at runtime by the host, so nothing
     // here is saved with the scene.
     class NetworkComponent : public Component {
     public:
         uint32_t netId = 0;
-        // Host-assigned peer number, 0 = the host. Connection handles are host-local.
+        // Host-assigned peer number: 0 is nobody, the host is 1. Whoever is named here supplies this
+        // entity's input on every peer. Connection handles are host-local.
         uint32_t ownerPeerId = 0;
-        NetAuthority authority = NetAuthority::Host;
-
-        [[nodiscard]] bool isAuthoritative() const { return authority != NetAuthority::Remote; }
 
         static constexpr const char* SerialId = "network";
         [[nodiscard]] const char* serialId() const override { return SerialId; }

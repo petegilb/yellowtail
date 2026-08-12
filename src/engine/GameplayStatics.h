@@ -7,6 +7,8 @@
 
 #include <cstdint>
 
+#include <SDL3/SDL_stdinc.h>
+
 #include <glm/mat4x4.hpp>
 
 #include "Entity.h"
@@ -14,6 +16,7 @@
 namespace ytail {
     class Engine;
     class World;
+    namespace net { class ReplicationManager; }
 
     enum class PlayState : uint8_t { Paused, Simulating };
 
@@ -25,6 +28,15 @@ namespace ytail {
 
         // The engine's entity/component storage, or nullptr before the engine exists.
         [[nodiscard]] static World* getWorld();
+
+        // Fixed steps run so far. Components need it to tag input and state by tick.
+        [[nodiscard]] static Uint64 getTickNumber();
+
+#if YELLOWTAIL_WITH_NETWORKING
+        // Nullptr before the engine exists. Bound to a peer only while a session is running, so
+        // callers still have to check isBound().
+        [[nodiscard]] static net::ReplicationManager* getReplication();
+#endif
 
         // World matrix to draw with, blending the last two simulated poses by alpha.
         [[nodiscard]] static glm::mat4 renderWorldMatrix(const World& world, EntityId id, float alpha);

@@ -158,6 +158,15 @@ namespace ytail {
         pendingCommands.clear();
     }
 
+    void World::fixedPreTickAll(const float deltaTime) {
+        ++iterationDepth;
+        for (const auto& pool : pools) {
+            if (pool) pool->fixedPreTickAll(deltaTime);
+        }
+        --iterationDepth;
+        flushDeferred();
+    }
+
     void World::fixedTickAll(const float deltaTime) {
         ++iterationDepth;
         for (const auto& pool : pools) {

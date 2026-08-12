@@ -4,6 +4,7 @@
 
 #include "RigidbodyComponent.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "imgui.h"
@@ -17,8 +18,18 @@
 namespace ytail {
     using namespace physics;
 
-    // cos of half the largest rotation step driveTo will derive an angular velocity from (~23 degrees).
-    constexpr float MaxDrivenRotationCos = 0.98f;
+    // Below these a body counts as settled for replication, even if Jolt has not slept it yet.
+    constexpr float RestLinearSpeed = 0.05f;
+    constexpr float RestAngularSpeed = 0.1f;
+    // How far a settled body may sit from an at-rest update before it is worth waking it to correct.
+    constexpr float RestSnapEpsilon = 0.05f;
+    // The rate the decay factors in VisualSmoothing were authored at, which has nothing to do with
+    // the fixed tick: smoothing is cosmetic, so it follows the wall clock.
+    constexpr float VisualErrorReferenceHz = 60.0f;
+    // Live, for the same reason as the replication rates: this is judged by eye, under lag, and
+    // rebuilding to try a number is the expensive part of this project. Sliders live in the
+    // networking debug window.
+    VisualSmoothing RigidbodyComponent::smoothing;
 
     void RigidbodyComponent::serialize(Archive& ar) {
         ar("colliders", colliders);
@@ -34,6 +45,7 @@ namespace ytail {
         : Component(std::move(other)),
           colliders(std::move(other.colliders)), type(other.type), properties(other.properties),
           body(other.body), bodyDirty(other.bodyDirty), propertiesDirty(other.propertiesDirty),
+          visualPositionError(other.visualPositionError), visualRotationError(other.visualRotationError),
           previousPosition(other.previousPosition), previousRotation(other.previousRotation),
           currentPosition(other.currentPosition), currentRotation(other.currentRotation),
           poseCount(other.poseCount) {
@@ -50,6 +62,8 @@ namespace ytail {
         body = other.body;
         bodyDirty = other.bodyDirty;
         propertiesDirty = other.propertiesDirty;
+        visualPositionError = other.visualPositionError;
+        visualRotationError = other.visualRotationError;
         previousPosition = other.previousPosition;
         previousRotation = other.previousRotation;
         currentPosition = other.currentPosition;
@@ -86,6 +100,11 @@ namespace ytail {
         return true;
     }
 
+    // The body has to exist before the step, and before anything applies a force to it.
+    void RigidbodyComponent::fixedPreTick(float) {
+        ensureBody(getSibling<TransformComponent>());
+    }
+
     void RigidbodyComponent::fixedTick(float deltaTime) {
         // Looked up each tick: cached component pointers go stale when pools change.
         TransformComponent* transform = getSibling<TransformComponent>();
@@ -108,6 +127,39 @@ namespace ytail {
         }
     }
 
+    // Ramped between the two rates across the range where an error goes from unnoticeable to
+    // obvious, rather than stepped at a single threshold: a step shows up as the fade rate changing
+    // abruptly as a body crosses it. reference: https://www.gafferongames.com/post/state_synchronization/
+    static float decayFactor(const float error, const float small, const float large) {
+        const VisualSmoothing& smoothing = RigidbodyComponent::smoothing;
+        const float span = std::max(large - small, 1e-4f);
+        const float t = std::clamp((error - small) / span, 0.0f, 1.0f);
+        return glm::mix(smoothing.smallDecay, smoothing.largeDecay, t);
+    }
+
+    // tick is variable rate, so raise the per-frame factor by the number of reference frames this
+    // one covers, or the smoothing runs faster on a faster display.
+    void RigidbodyComponent::decayVisualError(const float deltaTime) {
+        if (deltaTime <= 0.0f) return;
+
+        const float positionError = glm::length(visualPositionError);
+        // Its own magnitude, not the position's. A body a centimetre out of place but visibly out of
+        // spin would otherwise take the gentle rate chosen for the position and hold that spin for
+        // hundreds of milliseconds, which on anything with a surface is the more obvious error.
+        const float angleError = 2.0f * std::acos(std::clamp(std::abs(visualRotationError.w), 0.0f, 1.0f));
+        if (positionError < 1e-4f && angleError < 1e-4f) {
+            visualPositionError = glm::vec3(0.0f);
+            visualRotationError = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            return;
+        }
+
+        const float frames = deltaTime * VisualErrorReferenceHz;
+        visualPositionError *= std::pow(decayFactor(positionError, smoothing.smallError, smoothing.largeError), frames);
+        const float rotationDecay =
+            std::pow(decayFactor(angleError, smoothing.smallRotation, smoothing.largeRotation), frames);
+        visualRotationError = glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), visualRotationError, rotationDecay);
+    }
+
     glm::vec3 RigidbodyComponent::getInterpolatedPosition(float alpha) const {
         return glm::mix(previousPosition, currentPosition, alpha);
     }
@@ -117,6 +169,8 @@ namespace ytail {
     }
 
     void RigidbodyComponent::tick(float deltaTime) {
+        decayVisualError(deltaTime);
+
         // we want to be able to edit the physics bodies in the editor so still run this on tick.
         const TransformComponent* transform = getSibling<TransformComponent>();
         if (!ensureBody(transform)) return;
@@ -127,36 +181,72 @@ namespace ytail {
         }
     }
 
-    void RigidbodyComponent::setNetworkDriven(const bool driven) {
-        if (networkDriven == driven) return;
-        if (driven && type == BodyType::Static) return;
-        networkDriven = driven;
-        if (driven) authoredType = type;
-
-        // Switched in place rather than through bodyDirty: a rebuild would drop velocity, contacts and the BodyID.
-        type = driven ? BodyType::Kinematic : authoredType;
-        if (body != InvalidBody) PhysicsManager::get().setBodyMotionType(body, type);
-        poseCount = 0;
+    bool RigidbodyComponent::isAtRest() const {
+        if (body == InvalidBody) return true;
+        if (!PhysicsManager::get().isBodyActive(body)) return true;
+        const glm::vec3 linear = getLinearVelocity();
+        const glm::vec3 angular = getAngularVelocity();
+        return glm::dot(linear, linear) < RestLinearSpeed * RestLinearSpeed
+            && glm::dot(angular, angular) < RestAngularSpeed * RestAngularSpeed;
     }
 
-    void RigidbodyComponent::driveTo(const glm::vec3& position, const glm::quat& rotation, const float deltaTime) {
-        if (body == InvalidBody || !networkDriven || deltaTime <= 0.0f) return;
+    // Points both render-interpolation endpoints at one pose. The offset below is solved against
+    // the body, but rendering applies it to the interpolated pose, and those endpoints are only
+    // refreshed after the physics step. Left alone they lag the body by up to a tick, which on a
+    // ball spinning at 40 rad/s is around 38 degrees of rotation injected on every correction.
+    void RigidbodyComponent::collapseInterpolation(const glm::vec3& position, const glm::quat& rotation) {
+        previousPosition = position;
+        previousRotation = rotation;
+        currentPosition = position;
+        currentRotation = rotation;
+        poseCount = 2;
+    }
+
+    // Moves the body and nothing else. Hiding the move is the caller's job, by wrapping this in
+    // captureVisualReference/applyVisualReference: a correction is always followed by a replay that
+    // moves the body again, and only the total displacement is worth smoothing.
+    void RigidbodyComponent::setState(const glm::vec3& position, const glm::quat& rotation,
+                                      const glm::vec3& linear, const glm::vec3& angular,
+                                      const bool atRest) {
+        if (body == InvalidBody) return;
 
         glm::vec3 bodyPosition;
         glm::quat bodyRotation;
         PhysicsManager::get().getBodyTransform(body, bodyPosition, bodyRotation);
+        const glm::vec3 error = position - bodyPosition;
 
-        // Past these limits the derived velocity would launch whatever this body is touching, so
-        // teleport and give up the push for a frame.
-        const glm::vec3 step = position - bodyPosition;
-        const float maxStep = maxDrivenSpeed * deltaTime;
-        const float rotationDot = std::abs(glm::dot(bodyRotation, rotation));
-        if (glm::dot(step, step) > maxStep * maxStep || rotationDot < MaxDrivenRotationCos) {
-            PhysicsManager::get().setBodyTransform(body, position, rotation);
-            return;
-        }
+        // setBodyTransform always wakes the body, so a settled one already in about the right place
+        // must be left alone or every packet holds it awake.
+        if (atRest && isAtRest() && glm::dot(error, error) < RestSnapEpsilon * RestSnapEpsilon) return;
 
-        PhysicsManager::get().moveKinematic(body, position, rotation, deltaTime);
+        PhysicsManager::get().setBodyTransform(body, position, rotation);
+        PhysicsManager::get().setLinearVelocity(body, linear);
+        PhysicsManager::get().setAngularVelocity(body, angular);
+        collapseInterpolation(position, rotation);
+    }
+
+    // Where this body is on screen right now: the interpolated pose plus whatever offset is still
+    // decaying from an earlier correction. alpha must be the one the last frame was drawn with.
+    void RigidbodyComponent::captureVisualReference(const float alpha) {
+        if (body == InvalidBody) return;
+        renderedPosition = getInterpolatedPosition(alpha) + visualPositionError;
+        renderedRotation = glm::normalize(visualRotationError * getInterpolatedRotation(alpha));
+    }
+
+    // Re-solves the offset against whatever trajectory the rollback left behind, so the render lands
+    // back where the eye had it however far the body moved in between. Continuity is unconditional:
+    // the offset is taken in full, and how fast it is given back is decayVisualError's business.
+    // Capping it here would make the part given up an instant jump, which is the one thing this
+    // whole mechanism exists to avoid.
+    //
+    // Deliberately does not touch the interpolation endpoints. Collapsing them onto the corrected
+    // pose also works, but it costs the body a tick of smooth motion, and a body corrected on every
+    // packet would pay that ten times a second. Reading the endpoints instead means a body the
+    // rollback left alone comes out with exactly the offset it already had.
+    void RigidbodyComponent::applyVisualReference(const float alpha) {
+        if (body == InvalidBody) return;
+        visualPositionError = renderedPosition - getInterpolatedPosition(alpha);
+        visualRotationError = glm::normalize(renderedRotation * glm::inverse(getInterpolatedRotation(alpha)));
     }
 
     void RigidbodyComponent::addForce(const glm::vec3& force) {
@@ -233,6 +323,11 @@ namespace ytail {
         if (ImGui::DragFloat("Mass Override", &properties.overrideMass, 0.1f, 0.f, 10000.f, "%.2f (0 = from shape)"))
             bodyDirty = true;
         if (body != InvalidBody && type == BodyType::Dynamic) ImGui::Text("Mass: %.2f", getMass());
+
+        ImGui::SeparatorText("Networking");
+
+        ImGui::Text("At Rest: %s", isAtRest() ? "yes" : "no");
+        ImGui::Text("Visual Error: %.3f m", glm::length(visualPositionError));
 
         ImGui::SeparatorText("Colliders");
 

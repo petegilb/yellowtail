@@ -25,6 +25,16 @@ namespace ytail {
         return engine ? &engine->getWorld() : nullptr;
     }
 
+    Uint64 GameplayStatics::getTickNumber() {
+        return engine ? engine->getTickNumber() : 0;
+    }
+
+#if YELLOWTAIL_WITH_NETWORKING
+    net::ReplicationManager* GameplayStatics::getReplication() {
+        return engine ? &engine->getReplication() : nullptr;
+    }
+#endif
+
     static const RigidbodyComponent* steppedRootBody(const World& world, EntityId id) {
         const Entity* entity = world.getEntity(id);
         while (entity != nullptr && entity->getParentId() != NULL_ENTITY) {
@@ -54,8 +64,14 @@ namespace ytail {
 
         // The sim works in world space but writes local position/rotation, so a root body's
         // interpolated pose is its world matrix.
-        return glm::translate(glm::mat4(1.0f), rootBody->getInterpolatedPosition(alpha))
-             * glm::mat4_cast(rootBody->getInterpolatedRotation(alpha))
+        //
+        // The visual error is added here and nowhere else: a network correction snaps the body
+        // immediately, and this offset carries the rendered position back to where the eye last saw
+        // it, then decays. Physics reads its pose straight from Jolt, so none of this reaches the
+        // simulation, raycasts, or anything gameplay decides with.
+        return glm::translate(glm::mat4(1.0f), rootBody->getInterpolatedPosition(alpha)
+                                             + rootBody->getVisualPositionError())
+             * glm::mat4_cast(rootBody->getVisualRotationError() * rootBody->getInterpolatedRotation(alpha))
              * glm::scale(glm::mat4(1.0f), transform->getScale());
     }
 } // ytail

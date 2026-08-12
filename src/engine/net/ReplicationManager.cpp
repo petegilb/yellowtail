@@ -5,8 +5,8 @@
 #include "ReplicationManager.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
-#include <iterator>
 
 #include <SDL3/SDL.h>
 
@@ -18,6 +18,7 @@
 #include "engine/components/NetworkComponent.h"
 #include "engine/components/RigidbodyComponent.h"
 #include "engine/components/TransformComponent.h"
+#include "engine/managers/PhysicsManager.h"
 #include "engine/render/DebugDraw.h"
 
 namespace ytail::net {
@@ -26,6 +27,25 @@ namespace ytail::net {
     constexpr int SendBufferWords = 16 * 1024;
     constexpr int SoftPacketBytes = 1200;
 
+    // Defaults meant to hold together up to about 300ms rather than be tuned for it. What that
+    // latency costs is staleness: a packet is roughly twenty ticks behind us by the time it can be
+    // applied, so every threshold has to treat that as normal rather than as a fault.
+    Uint64 ReplicationManager::snapshotSendInterval = 6;
+    Uint64 ReplicationManager::minJitterTicks = 2;
+    // Real jitter at this latency moves further than a single tick.
+    Uint64 ReplicationManager::jitterMargin = 2;
+    // Three seconds per shrink step: a connection that spikes will spike again.
+    int ReplicationManager::jitterWindowPackets = 30;
+    // Two ticks absorbs the clock lead on a local connection, leaving every peer on the same tick at
+    // the same moment with two ticks of margin for the hop itself.
+    Uint64 ReplicationManager::inputDelayTicks = 8;
+    // 5cm, well inside a ball and far looser than the 2mm the wire can express. Tight enough that a
+    // real divergence is caught, loose enough that solver noise is not mistaken for one.
+    float ReplicationManager::predictionTolerance = 0.05f;
+    // Eight degrees. A ball at the angular speed cap covers that in a couple of ticks, so it is
+    // tight enough to catch real drift without firing on quantization.
+    float ReplicationManager::predictionAngleTolerance = 0.14f;
+
     // One definition for both directions, so a field can never be added to the write side and
     // forgotten on the read side.
     template<typename Stream>
@@ -33,14 +53,108 @@ namespace ytail::net {
         stream.serializeVarUInt(entity.netId);
         stream.serializeVarUInt(entity.hostEntityId);
         stream.serializeVarUInt(entity.ownerPeerId);
-        stream.serializePose(entity.pose);
+        serializeState(stream, entity.state);
     }
 
-    const EntitySnapshot* WorldSnapshot::find(const uint32_t netId) const {
-        const auto it = std::lower_bound(entities.begin(), entities.end(), netId,
-            [](const EntitySnapshot& entity, const uint32_t id) { return entity.netId < id; });
-        if (it == entities.end() || it->netId != netId) return nullptr;
-        return &*it;
+    int entityBits(const EntitySnapshot& entity) {
+        return varUIntBits(entity.netId) + varUIntBits(entity.hostEntityId) + varUIntBits(entity.ownerPeerId)
+             + stateBits(entity.state);
+    }
+
+    void ClientSyncState::grow(const size_t netIdCount) {
+        if (priority.size() >= netIdCount) return;
+        priority.resize(netIdCount, 0.0f);
+        lastSentState.resize(netIdCount);
+        lastSentOwner.resize(netIdCount, ReplicationManager::NoOwner);
+        pendingSends.resize(netIdCount, ReplicationManager::RestRedundancy);
+        lastSentTick.resize(netIdCount, 0);
+    }
+
+    void InputHistory::write(const Uint64 tick, const NetInputFrame& frame) {
+        const size_t slot = tick % Length;
+        // Only forwards: a redundant copy of a frame we already hold must not overwrite a newer one
+        // that happens to share the slot.
+        if (ticks[slot] > tick) return;
+        ticks[slot] = tick;
+        frames[slot] = frame;
+        newestTick = std::max(newestTick, tick);
+    }
+
+    NetInputFrame InputHistory::at(const Uint64 tick) const {
+        const size_t slot = tick % Length;
+        return ticks[slot] == tick ? frames[slot] : NetInputFrame{};
+    }
+
+    NetInputFrame InputHistory::read(const Uint64 tick) {
+        const size_t slot = tick % Length;
+        if (ticks[slot] == tick) return frames[slot];
+
+        // Nothing for this tick, so hold the newest one we do have. This is the normal case for
+        // another player: we run ahead of the host, so their input is always behind our simulation
+        // and every tick of theirs is extrapolated. Only giving up entirely counts as starvation.
+        if (newestTick == 0 || tick < newestTick) {
+            ++starved;
+            return {};
+        }
+        if (tick - newestTick > ReplicationManager::MaxInputStaleTicks) {
+            ++starved;
+            return {};
+        }
+        const size_t newestSlot = newestTick % Length;
+        if (ticks[newestSlot] != newestTick) return {};
+
+        // Held bits carry forward, edges do not: this frame is standing in for a tick it was not
+        // sent for, and an edge belongs to the one tick it was actually pressed on.
+        NetInputFrame repeated = frames[newestSlot];
+        repeated.buttons &= ~NetInputFrame::edgeButtons;
+        return repeated;
+    }
+
+    // Shortest angle between two orientations. The absolute value folds q and -q together, which
+    // name the same rotation.
+    static float angleBetween(const glm::quat& from, const glm::quat& to) {
+        return 2.0f * std::acos(std::clamp(std::abs(glm::dot(from, to)), 0.0f, 1.0f));
+    }
+
+    void PredictedPoses::write(const Uint64 tick, const glm::vec3& position, const glm::quat& rotation) {
+        const size_t slot = tick % Length;
+        ticks[slot] = tick;
+        positions[slot] = position;
+        rotations[slot] = rotation;
+    }
+
+    bool PredictedPoses::poseAt(const Uint64 tick, glm::vec3& outPosition, glm::quat& outRotation) const {
+        const size_t slot = tick % Length;
+        if (ticks[slot] != tick) return false;
+        outPosition = positions[slot];
+        outRotation = rotations[slot];
+        return true;
+    }
+
+    bool PredictedPoses::matches(const Uint64 tick, const glm::vec3& position, const glm::quat& rotation) const {
+        glm::vec3 predictedPosition;
+        glm::quat predictedRotation;
+        if (!poseAt(tick, predictedPosition, predictedRotation)) return false;
+        return glm::distance(predictedPosition, position) <= ReplicationManager::predictionTolerance
+            && angleBetween(predictedRotation, rotation) <= ReplicationManager::predictionAngleTolerance;
+    }
+
+    // Up at once, down slowly. A packet later than the hold arrives after it was due and pops
+    // whatever it moves, so there is no reason to ease into covering it; giving the slack back
+    // breaks nothing, so there is no reason to hurry.
+    void JitterEstimator::observe(const Uint64 transit) {
+        worstTransit = std::max(worstTransit, transit);
+        const Uint64 needed = std::max(transit + ReplicationManager::jitterMargin,
+                                       ReplicationManager::minJitterTicks);
+        windowMax = std::max(windowMax, needed);
+        target = std::max(target, needed);
+
+        if (++windowPackets < ReplicationManager::jitterWindowPackets) return;
+        // One tick per window, and never below what this window actually needed.
+        if (target > windowMax) --target;
+        windowMax = 0;
+        windowPackets = 0;
+        target = std::min(target, ReplicationManager::MaxJitterTicks);
     }
 
     void ReplicationManager::sampleBandwidth() {
@@ -59,29 +173,211 @@ namespace ytail::net {
         }
     }
 
+    // Filed against a tick in the future, not the one being simulated, so it has that many ticks of
+    // head start to reach everyone before they reach the tick it belongs to. Close that gap and
+    // their simulation of this ball is exact rather than a guess repeated forward. The cost is that
+    // our own ball acts on it that late, which torque already hides on anything with mass.
+    void ReplicationManager::setLocalInput(const Uint64 tick, const NetInputFrame& frame) {
+        if (localPeerId == NoOwner) return;
+        inputByPeer[localPeerId].write(tick + inputDelayTicks, frame);
+    }
+
+    bool ReplicationManager::hasLocalInputFor(const Uint64 tick) const {
+        if (localPeerId == NoOwner) return false;
+        const auto history = inputByPeer.find(localPeerId);
+        return history != inputByPeer.end() && history->second.newestTick >= tick + inputDelayTicks;
+    }
+
+    NetInputFrame ReplicationManager::getInput(const uint32_t peerId, const Uint64 tick) {
+        if (peerId == NoOwner) return {};
+        const auto history = inputByPeer.find(peerId);
+        return history == inputByPeer.end() ? NetInputFrame{} : history->second.read(tick);
+    }
+
+    // The newest frames, oldest first, each either a repeat of the one before it or eight fresh
+    // bits. Redundancy is what makes losing an input packet a non-event.
+    //
+    // Every peer stamps input with the shared tick, so a frame lands in the same slot on every
+    // machine and a redundant copy repairs the hole it was sent to repair.
+    template<typename Stream>
+    void ReplicationManager::serializeInputWindow(Stream& stream, const uint32_t peerId, const Uint64 newestTick) {
+        InputHistory& history = inputByPeer[peerId];
+        NetInputFrame previous;
+        for (int i = NetInputRedundancy - 1; i >= 0; --i) {
+            const auto age = static_cast<Uint64>(i);
+            const Uint64 tick = newestTick >= age ? newestTick - age : 0;
+            NetInputFrame frame;
+            // at, not read: a hole in what we are sending is not input starvation in the simulation.
+            if constexpr (Stream::IsWriting) frame = history.at(tick);
+
+            bool sameAsPrevious = frame == previous;
+            stream.serializeBool(sameAsPrevious);
+            if (sameAsPrevious) frame = previous;
+            else stream.serializeBits(frame.buttons, NetInputButtonBits);
+
+            if constexpr (!Stream::IsWriting) history.write(tick, frame);
+            previous = frame;
+        }
+    }
+
+    // One way trip in ticks, plus the margin we want to keep. Falls back to the fixed guess while
+    // the backend has no estimate, which is the case for the first moments of a connection.
+    Uint64 ReplicationManager::leadFromPing() const {
+        const std::vector<uint32_t>& connections = peer->getConnections();
+        if (connections.empty()) return InitialInputLead;
+        const int pingMs = peer->getPingMs(connections.front());
+        if (pingMs < 0) return InitialInputLead;
+
+        const auto oneWayTicks = static_cast<Uint64>(
+            std::ceil((static_cast<float>(pingMs) * 0.5f) / (Engine::FIXED_DT * 1000.0f)));
+        // Seeded where the steering will hold it, so the clock does not start somewhere it will
+        // immediately be dragged away from. The delay is head start the clock does not have to
+        // provide, so it comes back off the target here.
+        const auto fromDelay = static_cast<Uint64>(inputLeadTarget()) - inputDelayTicks;
+        return std::clamp<Uint64>(oneWayTicks + fromDelay, 0, MaxInputLeadTicks);
+    }
+
+    // How far ahead of the host our input has to be stamped: clock lead and delay together, which
+    // is what the host measures and all it needs to know.
+    //
+    // The clock lead exists so our input reaches the host before it simulates that tick. Input delay
+    // buys the same thing without moving the clock, so the clock only makes up what the delay does
+    // not already cover. Running ahead on top of a full delay would produce input for a tick every
+    // other peer passed through that much earlier, which is what leaves a player's ball guessed at
+    // on every machine but their own.
+    int32_t ReplicationManager::inputLeadTarget() {
+        return std::max(InputLeadTarget, static_cast<int32_t>(inputDelayTicks));
+    }
+
+    // One tick at a time, with a dead band and a cooldown. The lead being reported is a round trip
+    // old, so an adjustment does not show up in it for a while: reacting to every packet would keep
+    // correcting for a change already made and oscillate.
+    void ReplicationManager::steerClock(const int32_t reportedLead) {
+        measuredInputLead = reportedLead;
+        if (engine == nullptr) return;
+        if (clockCooldown > 0) {
+            --clockCooldown;
+            return;
+        }
+
+        const int32_t target = inputLeadTarget();
+        const int32_t error = reportedLead < target ? target - reportedLead
+            : (reportedLead > target + InputLeadSlack
+               ? target + InputLeadSlack - reportedLead : 0);
+        if (error == 0) return;
+
+        // A large error is a step change, not drift: a hitch, a route change, or a bad initial
+        // estimate. Crawling one tick at a time would take seconds, so close most of it at once and
+        // let the dead band settle the rest.
+        const int adjustment = std::abs(error) > InputLeadJumpThreshold ? error : (error > 0 ? 1 : -1);
+        engine->adjustClock(adjustment);
+        ++clockAdjustments;
+        clockCooldown = ClockAdjustCooldownPackets;
+    }
+
+    static void tickSlider(const char* label, Uint64& value, const int max, const char* tooltip) {
+        int ticks = static_cast<int>(value);
+        if (ImGui::SliderInt(label, &ticks, 0, max, "%d ticks")) value = static_cast<Uint64>(std::max(0, ticks));
+        ImGui::SetItemTooltip("%s", tooltip);
+    }
+
+    // Everything worth turning a dial on while watching two balls collide under lag. The rates take
+    // effect on the next packet; the smoothing is read per rendered frame, so it is immediate.
+    void ReplicationManager::drawTuning() {
+        ImGui::SeparatorText("Tuning");
+        tickSlider("State interval", snapshotSendInterval, 12,
+                   "Ticks between snapshots. Lower corrects sooner, for more bandwidth.");
+        tickSlider("Jitter floor", minJitterTicks, 12,
+                   "Only a floor. The hold in use is measured, not set here.");
+        tickSlider("Jitter margin", jitterMargin, 8,
+                   "Slack above the worst transit seen. Raise it if stacks still pop.");
+        ImGui::SliderInt("Jitter window", &jitterWindowPackets, 4, 120, "%d packets");
+        ImGui::SetItemTooltip("Packets between shrink steps. Longer holds onto slack after a spike.");
+        ImGui::SliderFloat("Prediction tolerance", &predictionTolerance, 0.001f, 0.5f, "%.3f m");
+        ImGui::SetItemTooltip("How far a body may drift before the world is rewound and replayed.");
+        ImGui::SliderAngle("Prediction angle", &predictionAngleTolerance, 0.0f, 45.0f);
+        ImGui::SetItemTooltip("The same, for spin. Checked separately: a ball can hold its position "
+                              "while its rotation drifts.");
+        tickSlider("Input delay", inputDelayTicks, 8,
+                   "Ticks before your own ball acts, in exchange for everyone else simulating it "
+                   "exactly instead of guessing. Two covers a local connection.");
+
+        VisualSmoothing& smoothing = RigidbodyComponent::smoothing;
+        ImGui::SliderFloat("Small decay", &smoothing.smallDecay, 0.5f, 0.999f, "%.3f /frame");
+        ImGui::SliderFloat("Large decay", &smoothing.largeDecay, 0.5f, 0.999f, "%.3f /frame");
+        ImGui::SetItemTooltip("Lower is faster. Raise it if remote players slide rather than jitter.");
+        ImGui::SliderFloat("Small error", &smoothing.smallError, 0.01f, 2.0f, "%.2f m");
+        ImGui::SliderFloat("Large error", &smoothing.largeError, 0.01f, 5.0f, "%.2f m");
+        ImGui::SetItemTooltip("The range the fade rate ramps across, from gentle to tight.");
+        ImGui::SliderAngle("Small rotation", &smoothing.smallRotation, 0.0f, 90.0f);
+        ImGui::SliderAngle("Large rotation", &smoothing.largeRotation, 0.0f, 180.0f);
+        ImGui::SetItemTooltip("The same range for spin, judged on its own angle.");
+    }
+
+    void ReplicationManager::sampleCorrection() {
+        const Uint64 now = SDL_GetTicks();
+        if (correctionWindowStartMs == 0) {
+            correctionWindowStartMs = now;
+            return;
+        }
+        if (now - correctionWindowStartMs < 250) return;
+
+        const float samples = static_cast<float>(std::max(correction.count, 1));
+        correction.mean = correction.count > 0 ? correction.total / samples : 0.0f;
+        correction.meanAngle = correction.count > 0 ? correction.totalAngle / samples : 0.0f;
+        correction.peak = std::max(correction.peak * 0.9f, correction.mean);
+        correctionHistory[correctionHistoryIndex] = correction.mean;
+        correctionHistoryIndex = (correctionHistoryIndex + 1) % static_cast<int>(correctionHistory.size());
+        correction.total = 0.0f;
+        correction.totalAngle = 0.0f;
+        correction.count = 0;
+
+        resimStepsPerSecond = static_cast<float>(resimStepsThisWindow)
+                            * 1000.0f / static_cast<float>(now - correctionWindowStartMs);
+        resimStepsThisWindow = 0;
+        deepestResim = static_cast<int>(static_cast<float>(deepestResim) * 0.75f);
+        correctionWindowStartMs = now;
+    }
+
     void ReplicationManager::capture(const Uint64 tick) {
         if (!isBound() || !peer->isActive()) return;
         sampleBandwidth();
         if (peer->isHosting()) {
+            // Every tick, separately from state. Clients simulate each other's balls from these, so
+            // forwarding them at the state rate left them acting on input a whole send interval
+            // stale, which showed up as the other players constantly being corrected.
+            sendPeerInput();
             captureHost(tick);
-        } else if (newestReceivedTick != 0 && tick % ClientStateSendInterval == 0) {
-            sendClientState();
         } else {
-            return;
+            recordPredictions(tick);
+            saveContacts(tick);
+            if (localPeerId == NoOwner || tick % InputSendInterval != 0) return;
+            sendClientInput();
         }
         peer->flush();
     }
 
+    // Velocity rides along because remote peers simulate this body rather than interpolate it.
+    // A networked entity without a rigidbody has no velocity to report and is always at rest.
+    QuantizedState ReplicationManager::captureState(const EntityId id, const TransformComponent& transform) const {
+        const RigidbodyComponent* rigidbody = engine->getWorld().get<RigidbodyComponent>(id);
+        if (rigidbody == nullptr) {
+            return quantizeState(transform.getPosition(), transform.getRotation(),
+                                 glm::vec3(0.0f), glm::vec3(0.0f), true);
+        }
+        return quantizeState(transform.getPosition(), transform.getRotation(),
+                             rigidbody->getLinearVelocity(), rigidbody->getAngularVelocity(),
+                             rigidbody->isAtRest());
+    }
+
     void ReplicationManager::captureHost(const Uint64 tick) {
-        // History is kept at send granularity, not per tick: a client's acked baseline has to
-        // survive long enough for a slow reliable transfer to land and be acknowledged.
-        // Tick 0 is skipped so 0 stays unambiguous as the "nothing acked yet" sentinel.
-        if (tick == 0 || tick % SnapshotSendInterval != 0) return;
+        if (tick == 0 || tick % snapshotSendInterval != 0) return;
 
         World& world = engine->getWorld();
 
-        WorldSnapshot snapshot;
-        snapshot.tick = tick;
+        // One quantize pass shared by every connection; only the choice of what to send is per
+        // client. netId indexes straight into it, so selection needs no lookups.
+        latestStates.clear();
         world.each<NetworkComponent, TransformComponent>(
             [&](const EntityId id, NetworkComponent& network, const TransformComponent& transform) {
                 if (network.netId == 0) network.netId = nextNetId++;
@@ -90,97 +386,207 @@ namespace ytail::net {
                 entity.netId = network.netId;
                 entity.hostEntityId = id;
                 entity.ownerPeerId = network.ownerPeerId;
-                entity.pose = quantizePose(transform.getPosition(), transform.getRotation());
-                snapshot.entities.push_back(entity);
+                entity.state = captureState(id, transform);
+                latestStates.push_back(entity);
             });
-        std::sort(snapshot.entities.begin(), snapshot.entities.end(),
-            [](const EntitySnapshot& left, const EntitySnapshot& right) { return left.netId < right.netId; });
-
-        sentHistory.push_back(std::move(snapshot));
-        while (sentHistory.size() > MaxSnapshotHistory) sentHistory.pop_front();
+        lastSnapshotEntities = static_cast<int>(latestStates.size());
 
         const std::vector<uint32_t>& connections = peer->getConnections();
         std::erase_if(clients, [&connections](const auto& entry) {
             return std::find(connections.begin(), connections.end(), entry.first) == connections.end();
         });
 
-        const WorldSnapshot& latest = sentHistory.back();
         for (const uint32_t connection : connections) {
             const auto client = clients.find(connection);
             if (client == clients.end()) continue;
-            sendSnapshotTo(connection, client->second, latest);
+            sendStateTo(connection, client->second, tick);
         }
     }
 
-    void ReplicationManager::sendSnapshotTo(const uint32_t connection, ClientSyncState& client,
-                                            const WorldSnapshot& snapshot) {
-        // Still waiting on the reliable full snapshot to be acknowledged
-        if (client.awaitingBaseline() && client.ackedTick < client.pendingBaselineTick) return;
-        client.pendingBaselineTick = 0;
+    // Players first, then whatever is near the player, then everything else by how long it has been
+    // waiting. Deliberately small: it decides what a starved connection gives up first.
+    float ReplicationManager::basePriority(const EntitySnapshot& entity, const ClientSyncState& client,
+                                           const glm::vec3& clientFocus) const {
+        float priority = 1.0f;
+        if (entity.ownerPeerId != NoOwner) priority *= 4.0f;
+        if (entity.ownerPeerId == client.peerId) priority *= 2.0f;
 
-        const WorldSnapshot* baseline = client.ackedTick == 0 ? nullptr : findSent(client.ackedTick);
+        constexpr float FarDistance = 40.0f;
+        glm::vec3 position;
+        glm::quat rotation;
+        glm::vec3 linear;
+        glm::vec3 angular;
+        dequantizeState(entity.state, position, rotation, linear, angular);
+        const glm::vec3 offset = position - clientFocus;
+        if (glm::dot(offset, offset) > FarDistance * FarDistance) priority *= 0.25f;
+        return priority;
+    }
+
+    void ReplicationManager::sendStateTo(const uint32_t connection, ClientSyncState& client, const Uint64 tick) {
+        client.grow(nextNetId);
+
+        // Distance is measured from whatever this client owns, since that is where it is looking.
+        glm::vec3 clientFocus(0.0f);
+        for (const EntitySnapshot& entity : latestStates) {
+            if (entity.ownerPeerId != client.peerId) continue;
+            glm::quat rotation;
+            glm::vec3 linear;
+            glm::vec3 angular;
+            dequantizeState(entity.state, clientFocus, rotation, linear, angular);
+            break;
+        }
+
+        // Anything whose state changed owes a fresh round of sends; anything settled counts down
+        // and then goes silent, which is what makes a world full of resting objects free.
+        std::vector<const EntitySnapshot*> candidates;
+        for (const EntitySnapshot& entity : latestStates) {
+            const size_t index = entity.netId;
+            if (entity.state != client.lastSentState[index] || entity.ownerPeerId != client.lastSentOwner[index])
+                client.pendingSends[index] = RestRedundancy;
+            if (client.pendingSends[index] == 0) continue;
+            client.priority[index] += basePriority(entity, client, clientFocus);
+            candidates.push_back(&entity);
+        }
+        std::sort(candidates.begin(), candidates.end(),
+            [&client](const EntitySnapshot* left, const EntitySnapshot* right) {
+                return client.priority[left->netId] > client.priority[right->netId];
+            });
 
         sendWords.resize(SendBufferWords);
         BitWriter writer(sendWords.data(), SendBufferWords);
         writer.writeBits(static_cast<uint32_t>(NetMessageType::Snapshot), 8);
-        int changedEntities = 0;
-        if (!writeSnapshot(writer, snapshot, baseline, changedEntities)) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Snapshot for tick %llu overflowed the send buffer",
-                         static_cast<unsigned long long>(snapshot.tick));
+        writer.writeVarUInt(static_cast<uint32_t>(tick));
+
+        // Count has to be written before the entities, so the budget decides the set up front. The
+        // writer cannot rewind, which is also why the cost is checked before each entity, not after.
+        // complete and the count are written once the set is known, so they are reserved here at the
+        // largest they can be: selected never exceeds candidates.
+        constexpr int MaxStatePayloadBits = MaxStatePayloadBytes * 8;
+        std::vector<const EntitySnapshot*> selected;
+        int usedBits = writer.getBitsWritten() + 1 + varUIntBits(static_cast<uint32_t>(candidates.size()));
+        for (const EntitySnapshot* entity : candidates) {
+            // Charged what it actually costs. A single worst case price for every entity spent the
+            // packet on bits nothing was going to write: a resting body is half the size of a moving
+            // one, and both are far short of the largest ids the varints could hold.
+            const int cost = entityBits(*entity);
+            if (usedBits + cost > MaxStatePayloadBits) break;
+            usedBits += cost;
+            selected.push_back(entity);
+        }
+        client.lastSentEntities = static_cast<int>(selected.size());
+        client.lastSkippedEntities = static_cast<int>(candidates.size() - selected.size());
+
+        // Tells the client whether this packet is a restore point or only a correction. Resting
+        // bodies missing from it do not count against that: the host left them out because they
+        // have not moved, so where the client already has them is where they belong.
+        bool complete = selected.size() == candidates.size();
+        writer.serializeBool(complete);
+        writer.writeVarUInt(static_cast<uint32_t>(selected.size()));
+        for (const EntitySnapshot* entity : selected) {
+            EntitySnapshot copy = *entity;
+            serializeEntity(writer, copy);
+        }
+
+        // entityBits counts by hand what serializeEntity writes, so a field added to one and missed
+        // by the other surfaces here rather than as an oversized packet much later.
+        SDL_assert(writer.getBitsWritten() <= usedBits);
+
+        if (writer.hasOverflowed()) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "State packet for tick %llu overflowed the send buffer",
+                         static_cast<unsigned long long>(tick));
             return;
         }
         writer.flush();
 
-        const int size = writer.getBytesWritten();
-        lastSnapshotEntities = static_cast<int>(snapshot.entities.size());
-        client.lastSentBytes = size;
-        client.lastChangedEntities = changedEntities;
-        client.lastSendWasFull = baseline == nullptr;
+        // Only counted as sent once it is actually on the wire, so a dropped packet does not
+        // silence an entity that never made it out.
+        client.worstTicksSinceSent = 0;
+        for (const EntitySnapshot* entity : selected) {
+            const size_t index = entity->netId;
+            client.lastSentState[index] = entity->state;
+            client.lastSentOwner[index] = entity->ownerPeerId;
+            if (client.pendingSends[index] > 0) --client.pendingSends[index];
+            client.priority[index] = 0.0f;
+            client.lastSentTick[index] = tick;
+        }
+        for (const EntitySnapshot* entity : candidates) {
+            const Uint64 since = tick - client.lastSentTick[entity->netId];
+            client.worstTicksSinceSent = std::max(client.worstTicksSinceSent, since);
+        }
 
-        if (baseline == nullptr) {
-            // Reliable so a joining client is guaranteed its baseline. Unreliable would fragment
-            // across many packets with no retransmission, and losing any one drops the whole thing.
-            peer->sendReliable(connection, sendWords.data(), static_cast<uint32_t>(size));
-            sentBytes.add(size);
-            client.pendingBaselineTick = snapshot.tick;
-            ++client.fullSnapshotsSent;
-        } else {
-            peer->sendUnreliable(connection, sendWords.data(), static_cast<uint32_t>(size));
-            sentBytes.add(size);
+        const int size = writer.getBytesWritten();
+        client.lastSentBytes = size;
+        // Unreliable throughout: a lost packet is replaced by the next one, and priority makes sure
+        // whatever it was carrying comes back around.
+        peer->sendUnreliable(connection, sendWords.data(), static_cast<uint32_t>(size));
+        sentBytes.add(size);
+    }
+
+    // Everyone else's input, so a client can simulate the other players rather than watch them
+    // coast between updates. Each recipient's own input is skipped: it already has it, and skipping
+    // keeps the packet from growing with the square of the player count.
+    void ReplicationManager::sendPeerInput() {
+        for (const uint32_t connection : peer->getConnections()) {
+            const auto client = clients.find(connection);
+            if (client == clients.end()) continue;
+
+            // How far ahead of us this client is running, measured where it matters: the newest
+            // input it has sent, against the tick we are about to simulate. Positive means its
+            // input is waiting for us. This is the whole clock feedback loop.
+            // A client that has not produced input yet has nothing to measure: taking tick 0 as its
+            // position on the timeline reports a lead of minus our whole uptime, and that lands on
+            // its clock as one enormous jump forward the moment it joins.
+            const auto history = inputByPeer.find(client->second.peerId);
+            client->second.inputLead = history == inputByPeer.end() || history->second.newestTick == 0 ? 0
+                : static_cast<int32_t>(static_cast<int64_t>(history->second.newestTick) - static_cast<int64_t>(localTick));
+
+            std::vector<uint32_t> forwarded;
+            for (const auto& [peerId, peerHistory] : inputByPeer) {
+                if (peerId == client->second.peerId || peerId == NoOwner) continue;
+                forwarded.push_back(peerId);
+            }
+
+            sendWords.resize(SendBufferWords);
+            BitWriter writer(sendWords.data(), SendBufferWords);
+            writer.writeBits(static_cast<uint32_t>(NetMessageType::PeerInput), 8);
+            writer.writeVarUInt(static_cast<uint32_t>(client->second.inputLead + InputLeadBias));
+            writer.serializeCheck(CheckInput);
+            writer.writeVarUInt(static_cast<uint32_t>(forwarded.size()));
+            for (const uint32_t peerId : forwarded) {
+                const Uint64 newestTick = inputByPeer[peerId].newestTick;
+                writer.writeVarUInt(peerId);
+                writer.writeVarUInt(static_cast<uint32_t>(newestTick));
+                serializeInputWindow(writer, peerId, newestTick);
+            }
+            if (writer.hasOverflowed()) continue;
+            writer.flush();
+
+            const int bytes = writer.getBytesWritten();
+            peer->sendUnreliable(connection, sendWords.data(), static_cast<uint32_t>(bytes));
+            sentBytes.add(bytes);
         }
     }
 
-    bool ReplicationManager::writeSnapshot(BitWriter& writer, const WorldSnapshot& snapshot,
-                                           const WorldSnapshot* baseline, int& outChangedEntities) const {
-        writer.writeVarUInt(static_cast<uint32_t>(snapshot.tick));
-        writer.writeVarUInt(baseline == nullptr ? 0u : static_cast<uint32_t>(baseline->tick));
+    void ReplicationManager::onPeerInputMessage(const int size) {
+        // Clients only. This steers our clock, and on the host that is the clock everyone else is
+        // steering against.
+        if (peer->isHosting()) return;
 
-        std::vector<const EntitySnapshot*> changed;
-        std::vector<uint32_t> removed;
-        for (const EntitySnapshot& entity : snapshot.entities) {
-            const EntitySnapshot* previous = baseline == nullptr ? nullptr : baseline->find(entity.netId);
-            if (previous == nullptr || previous->pose != entity.pose
-                || previous->ownerPeerId != entity.ownerPeerId) {
-                changed.push_back(&entity);
-            }
+        BitReader reader(receiveWords.data(), size);
+        reader.readBits(8);
+        const auto reportedLead = static_cast<int32_t>(reader.readVarUInt()) - InputLeadBias;
+        reader.serializeCheck(CheckInput);
+        if (reader.hasOverflowed()) return;
+        steerClock(reportedLead);
+        const uint32_t forwardedPeers = reader.readVarUInt();
+        for (uint32_t i = 0; i < forwardedPeers; ++i) {
+            const uint32_t peerId = reader.readVarUInt();
+            const Uint64 newestTick = reader.readVarUInt();
+            if (reader.hasOverflowed() || newestTick > localTick + MaxInputLeadTicks) return;
+            // Always consumed, even for a peer id we have no use for: skipping the bits instead of
+            // reading them would leave the rest of the packet misaligned.
+            serializeInputWindow(reader, peerId, newestTick);
         }
-        if (baseline != nullptr) {
-            for (const EntitySnapshot& entity : baseline->entities) {
-                if (snapshot.find(entity.netId) == nullptr) removed.push_back(entity.netId);
-            }
-        }
-
-        outChangedEntities = static_cast<int>(changed.size());
-        writer.writeVarUInt(static_cast<uint32_t>(changed.size()));
-        for (const EntitySnapshot* entity : changed) {
-            EntitySnapshot copy = *entity;
-            serializeEntity(writer, copy);
-        }
-        writer.serializeCheck(CheckRemoved);
-        writer.writeVarUInt(static_cast<uint32_t>(removed.size()));
-        for (uint32_t netId : removed) writer.serializeVarUInt(netId);
-
-        return !writer.hasOverflowed();
     }
 
     void ReplicationManager::onMessage(const uint32_t connection, const void* data, const uint32_t size) {
@@ -203,8 +609,11 @@ namespace ytail::net {
             case NetMessageType::Snapshot: 
                 onSnapshotMessage(static_cast<int>(size)); 
                 break;
-            case NetMessageType::ClientState: 
-                onClientStateMessage(connection, static_cast<int>(size)); 
+            case NetMessageType::PeerInput:
+                onPeerInputMessage(static_cast<int>(size));
+                break;
+            case NetMessageType::ClientInput:
+                onClientInputMessage(connection, static_cast<int>(size));
                 break;
             case NetMessageType::Welcome:
                 onWelcomeMessage(static_cast<int>(size));
@@ -221,70 +630,29 @@ namespace ytail::net {
 
         WorldSnapshot snapshot;
         snapshot.tick = reader.readVarUInt();
-        const Uint64 baselineTick = reader.readVarUInt();
 
-        // Unreliable delivery can duplicate or reorder, and a second copy would just take a buffer slot.
+        // Unreliable delivery can duplicate or reorder, and a second copy would just take a slot.
         if (findReceived(snapshot.tick) != nullptr) return;
 
-        const WorldSnapshot* baseline = baselineTick == 0 ? nullptr : findReceived(baselineTick);
-        if (baselineTick != 0 && baseline == nullptr) {
-            // The host falls back to a full snapshot once it sees our ack has not moved.
-            ++droppedForMissingBaseline;
-            return;
-        }
-        if (baseline != nullptr) snapshot.entities = baseline->entities;
-
-        const auto byNetId = [](const EntitySnapshot& left, const EntitySnapshot& right) {
-            return left.netId < right.netId;
-        };
-
-        // Read first and merge once. Inserting each entity into the sorted vector as it arrives is
-        // O(n) per entity, which a packet full of entities turns into O(n^2).
-        std::vector<EntitySnapshot> changed;
-        const uint32_t changedCount = reader.readVarUInt();
-        for (uint32_t i = 0; i < changedCount; ++i) {
+        // Every packet stands on its own: it carries whichever entities won the host's budget this
+        // interval, and anything it leaves out is simply not being updated yet. There is no baseline
+        // to rebuild against and nothing to merge.
+        reader.serializeBool(snapshot.complete);
+        const uint32_t entityCount = reader.readVarUInt();
+        for (uint32_t i = 0; i < entityCount; ++i) {
             EntitySnapshot entity;
             serializeEntity(reader, entity);
             if (reader.hasOverflowed()) return;
-            changed.push_back(entity);
-        }
-
-        reader.serializeCheck(CheckRemoved);
-        std::vector<uint32_t> removed;
-        const uint32_t removedCount = reader.readVarUInt();
-        for (uint32_t i = 0; i < removedCount; ++i) {
-            uint32_t netId = 0;
-            reader.serializeVarUInt(netId);
-            if (reader.hasOverflowed()) return;
-            removed.push_back(netId);
+            snapshot.entities.push_back(entity);
         }
 
         if (reader.hasOverflowed()) return;
 
-        // stable_sort so a duplicated netId resolves to the last one sent.
-        std::stable_sort(changed.begin(), changed.end(), byNetId);
-        std::sort(removed.begin(), removed.end());
-
-        std::vector<EntitySnapshot> merged;
-        merged.reserve(snapshot.entities.size() + changed.size());
-        auto existing = snapshot.entities.begin();
-        for (auto update = changed.begin(); update != changed.end(); ++update) {
-            if (std::next(update) != changed.end() && std::next(update)->netId == update->netId) continue;
-            while (existing != snapshot.entities.end() && existing->netId < update->netId) {
-                merged.push_back(*existing++);
-            }
-            if (existing != snapshot.entities.end() && existing->netId == update->netId) ++existing;
-            merged.push_back(*update);
-        }
-        merged.insert(merged.end(), existing, snapshot.entities.end());
-
-        std::erase_if(merged, [&removed](const EntitySnapshot& entity) {
-            return std::binary_search(removed.begin(), removed.end(), entity.netId);
-        });
-        snapshot.entities = std::move(merged);
-
-        lastReceivedChanged = static_cast<int>(changed.size());
+        lastReceivedChanged = static_cast<int>(snapshot.entities.size());
         newestReceivedTick = std::max(newestReceivedTick, snapshot.tick);
+        // A packet describing a tick we have not reached means the clock just moved and this
+        // measurement says nothing about the connection.
+        if (localTick > snapshot.tick) jitter.observe(localTick - snapshot.tick);
         receivedHistory.push_back(std::move(snapshot));
         std::sort(receivedHistory.begin(), receivedHistory.end(),
             [](const WorldSnapshot& left, const WorldSnapshot& right) { return left.tick < right.tick; });
@@ -309,6 +677,7 @@ namespace ytail::net {
         BitWriter writer(sendWords.data(), SendBufferWords);
         writer.writeBits(static_cast<uint32_t>(NetMessageType::Welcome), 8);
         writer.writeVarUInt(peerId);
+        writer.writeVarUInt(static_cast<uint32_t>(engine->getTickNumber()));
         if (writer.hasOverflowed()) return;
         writer.flush();
         peer->sendReliable(connection, sendWords.data(), static_cast<uint32_t>(writer.getBytesWritten()));
@@ -318,9 +687,23 @@ namespace ytail::net {
         BitReader reader(receiveWords.data(), size);
         reader.readBits(8);
         const uint32_t peerId = reader.readVarUInt();
+        const Uint64 hostTick = reader.readVarUInt();
         if (reader.hasOverflowed() || peer->isHosting()) return;
         localPeerId = peerId;
-        SDL_Log("Assigned peer id %u by the host.", peerId);
+
+        // The host's numbering becomes ours, offset so we simulate a tick before it does. Our input
+        // for a tick then travels while the host is still working towards that tick, and arrives in
+        // time to be applied rather than guessed at.
+        //
+        // Seeded from the round trip so we start close, then held there by the lead the host reports
+        // back. RTT alone would assume the two directions are equally fast and would still need a
+        // guess at jitter; the feedback loop measures what actually happened. Neither is redundant.
+        const Uint64 lead = leadFromPing();
+        engine->setTickNumber(hostTick + lead);
+        // The slots are indexed by tick, and the numbering just changed under them.
+        contactsValid = false;
+        SDL_Log("Assigned peer id %u by the host, clock set to tick %llu (%llu ticks ahead).", peerId,
+                static_cast<unsigned long long>(hostTick + lead), static_cast<unsigned long long>(lead));
     }
 
     void ReplicationManager::onDisconnected(const uint32_t connection) {
@@ -333,9 +716,9 @@ namespace ytail::net {
             const uint32_t departed = entry->second.peerId;
             engine->getWorld().each<NetworkComponent>([&](const EntityId, NetworkComponent& network) {
                 if (network.ownerPeerId != departed) return;
-                network.ownerPeerId = 0;
-                ownedPoseByNetId.erase(network.netId);
+                network.ownerPeerId = NoOwner;
             });
+            inputByPeer.erase(departed);
             clients.erase(entry);
         } else {
             resetReceivedState();
@@ -346,127 +729,69 @@ namespace ytail::net {
         if (!isBound() || !peer->isHosting()) return;
         if (const auto network = engine->getWorld().get<NetworkComponent>(id)) {
             network->ownerPeerId = peerId;
-            // Anything the previous owner reported is stale
-            ownedPoseByNetId.erase(network->netId);
         }
     }
 
     uint32_t ReplicationManager::getPeerId(const uint32_t connection) const {
         const auto entry = clients.find(connection);
-        return entry == clients.end() ? 0 : entry->second.peerId;
-    }
-
-    void ReplicationManager::refreshAuthority() {
-        const bool hosting = peer->isHosting();
-        engine->getWorld().each<NetworkComponent>([&](const EntityId id, NetworkComponent& network) {
-            NetAuthority authority;
-            if (network.ownerPeerId == 0) {
-                authority = hosting ? NetAuthority::Host : NetAuthority::Remote;
-            } else {
-                authority = network.ownerPeerId == localPeerId ? NetAuthority::Owner : NetAuthority::Remote;
-            }
-            // Handing an entity over takes a round trip. The host keeps simulating it until the new
-            // owner reports a pose, so it is never kinematic on both machines with nobody driving it.
-            if (hosting && authority == NetAuthority::Remote && !ownedPoseByNetId.contains(network.netId)) {
-                authority = NetAuthority::Host;
-            }
-            network.authority = authority;
-
-            // Exactly one peer simulates a body; everyone else follows it kinematically.
-            if (RigidbodyComponent* rigidbody = engine->getWorld().get<RigidbodyComponent>(id)) {
-                rigidbody->setNetworkDriven(authority == NetAuthority::Remote);
-            }
-        });
+        return entry == clients.end() ? NoOwner : entry->second.peerId;
     }
 
     void ReplicationManager::resetReceivedState() {
-        // Hand the bodies back to the local solver, or they stay kinematic with nothing driving
-        // them. Every networked entity, not just the mapped ones: a connection that drops before
-        // the first snapshot lands leaves entityByNetId empty with bodies already driven.
-        if (engine != nullptr) {
-            World& world = engine->getWorld();
-            world.each<NetworkComponent>([&](const EntityId id, NetworkComponent& network) {
-                network.authority = NetAuthority::Host;
-                if (RigidbodyComponent* rigidbody = world.get<RigidbodyComponent>(id)) {
-                    rigidbody->setNetworkDriven(false);
-                }
-            });
-        }
         receivedHistory.clear();
         entityByNetId.clear();
         newestReceivedTick = 0;
-        playbackTick = 0.0;
-        clockStarted = false;
-        localPeerId = 0;
+        appliedTick = 0;
+        localPeerId = NoOwner;
+        inputByPeer.clear();
+        predictedByNetId.clear();
+        contactsValid = false;
+        lastResimDepth = 0;
+        clockCooldown = 0;
+        jitter.reset();
     }
 
-    void ReplicationManager::onClientStateMessage(const uint32_t connection, const int size) {
+    void ReplicationManager::onClientInputMessage(const uint32_t connection, const int size) {
         BitReader reader(receiveWords.data(), size);
         reader.readBits(8);
         const Uint64 ackedTick = reader.readVarUInt();
+        const Uint64 newestInputTick = reader.readVarUInt();
         if (reader.hasOverflowed() || !peer->isHosting()) return;
-
-        // An ack for a tick we never sent would pin this client on the full snapshot path forever.
-        const Uint64 newestSent = sentHistory.empty() ? 0 : sentHistory.back().tick;
-        if (ackedTick > newestSent) return;
+        // A tick out in the future would park this peer's history there: every later read would see
+        // a newer tick than the one asked for and hand back neutral input forever, and the lead it
+        // implies is what we send back for the client to steer its clock by.
+        if (newestInputTick > localTick + MaxInputLeadTicks) return;
 
         const auto entry = clients.find(connection);
         if (entry == clients.end()) return;
         ClientSyncState& client = entry->second;
+        // Kept only as a liveness readout now. Nothing waits on it: every packet is self-contained,
+        // so a client that never acks still receives state.
         client.ackedTick = std::max(client.ackedTick, ackedTick);
 
-        const uint32_t ownedCount = reader.readVarUInt();
-        for (uint32_t i = 0; i < ownedCount; ++i) {
-            uint32_t netId = 0;
-            QuantizedPose pose;
-            reader.serializeVarUInt(netId);
-            reader.serializePose(pose);
-            if (reader.hasOverflowed()) return;
-            // Only accept a pose for something this peer actually owns. Peer ids start at 1, so
-            // host-owned and unknown entities can never match a real client.
-            if (ownerPeerIdFor(netId) != client.peerId) continue;
-
-            const auto existing = ownedPoseByNetId.find(netId);
-            if (existing == ownedPoseByNetId.end()) {
-                ownedPoseByNetId[netId] = OwnedPose{ pose, pose, localTick };
-            } else {
-                existing->second.previous = existing->second.current;
-                existing->second.current = pose;
-                existing->second.arrivedTick = localTick;
-            }
-        }
+        // Keyed by the peer id we assigned, never by anything the client claims to be, so a client
+        // cannot drive another player's body by lying about who it is.
+        serializeInputWindow(reader, client.peerId, newestInputTick);
     }
 
-    uint32_t ReplicationManager::ownerPeerIdFor(const uint32_t netId) const {
-        const auto it = entityByNetId.find(netId);
-        if (it == entityByNetId.end()) return 0;
-        const NetworkComponent* network = engine->getWorld().get<NetworkComponent>(it->second);
-        return network != nullptr ? network->ownerPeerId : 0;
-    }
-
-    void ReplicationManager::sendClientState() {
-        std::vector<EntitySnapshot> owned;
-        engine->getWorld().each<NetworkComponent, TransformComponent>(
-            [&](const EntityId, const NetworkComponent& network, const TransformComponent& transform) {
-                if (network.authority != NetAuthority::Owner || network.netId == 0) return;
-                EntitySnapshot entity;
-                entity.netId = network.netId;
-                entity.pose = quantizePose(transform.getPosition(), transform.getRotation());
-                owned.push_back(entity);
-            });
+    void ReplicationManager::sendClientInput() {
+        const InputHistory& history = inputByPeer[localPeerId];
+        // Nothing produced yet, which is every tick between the welcome and the ball we own being
+        // named. Announcing tick 0 as our position on the timeline is worse than saying nothing.
+        if (history.newestTick == 0) return;
 
         sendWords.resize(SendBufferWords);
         BitWriter writer(sendWords.data(), SendBufferWords);
-        writer.writeBits(static_cast<uint32_t>(NetMessageType::ClientState), 8);
+        writer.writeBits(static_cast<uint32_t>(NetMessageType::ClientInput), 8);
         writer.writeVarUInt(static_cast<uint32_t>(newestReceivedTick));
-        writer.writeVarUInt(static_cast<uint32_t>(owned.size()));
-        for (EntitySnapshot& entity : owned) {
-            writer.serializeVarUInt(entity.netId);
-            writer.serializePose(entity.pose);
-        }
+        writer.writeVarUInt(static_cast<uint32_t>(history.newestTick));
+        serializeInputWindow(writer, localPeerId, history.newestTick);
         if (writer.hasOverflowed()) return;
         writer.flush();
-        peer->broadcastUnreliable(sendWords.data(), static_cast<uint32_t>(writer.getBytesWritten()));
+
+        const int bytes = writer.getBytesWritten();
+        peer->broadcastUnreliable(sendWords.data(), static_cast<uint32_t>(bytes));
+        sentBytes.add(bytes);
     }
 
     ReplicationManager::ReplicationManager(Engine *inEngine, NetPeer *inPeer) {
@@ -478,47 +803,166 @@ namespace ytail::net {
         if (!isBound() || !peer->isActive()) return;
         localTick = tick;
 
-        if (peer->isHosting()) {
-            refreshAuthority();
-            applyOwnedPoses(tick, Engine::FIXED_DT);
-            return;
-        }
+        // The host is peer 1 rather than a special case, so its input is stored and forwarded
+        // through the same path as everyone else's.
+        if (peer->isHosting()) localPeerId = HostPeerId;
+
+        std::erase_if(correctionMarkers, [this](const CorrectionMarker& marker) {
+            return localTick - marker.tick > CorrectionMarkerTicks;
+        });
+
+        sampleCorrection();
+        // The host simulates from the input it has been sent and answers to nobody, so there is
+        // nothing to apply on it.
+        if (peer->isHosting()) return;
         if (newestReceivedTick == 0) return;
-        refreshAuthority();
-        advanceClock();
-        applyInterpolated(Engine::FIXED_DT);
+        applyBufferedState();
     }
 
-    void ReplicationManager::applyOwnedPoses(const Uint64 tick, const float deltaTime) {
-        World& world = engine->getWorld();
-        world.each<NetworkComponent>([&](const EntityId id, const NetworkComponent& network) {
-            if (network.authority != NetAuthority::Remote) return;
-            const auto reported = ownedPoseByNetId.find(network.netId);
-            if (reported == ownedPoseByNetId.end()) return;
-            const OwnedPose& owned = reported->second;
+    // Kept per tick alongside the predictions, and for the same reason: a replay has to start from
+    // the solver state that belonged to the tick it is rewinding to.
+    void ReplicationManager::saveContacts(const Uint64 tick) {
+        physics::PhysicsManager::get().saveContacts(
+            static_cast<int>(tick % physics::PhysicsManager::MaxSavedContacts));
+        if (!contactsValid) {
+            oldestContactTick = tick;
+            contactsValid = true;
+        }
+        newestContactTick = tick;
+        const Uint64 ringOldest = tick >= physics::PhysicsManager::MaxSavedContacts - 1
+            ? tick - (physics::PhysicsManager::MaxSavedContacts - 1) : 0;
+        oldestContactTick = std::max(oldestContactTick, ringOldest);
+    }
 
-            // Reports land every ClientStateSendInterval ticks. interpolate between them.
-            const double elapsed = tick > owned.arrivedTick
-                ? static_cast<double>(tick - owned.arrivedTick) : 0.0;
-            const float blend = static_cast<float>(
-                std::clamp(elapsed / static_cast<double>(ClientStateSendInterval), 0.0, 1.0));
+    void ReplicationManager::recordPredictions(const Uint64 tick) {
+        engine->getWorld().each<NetworkComponent, TransformComponent>(
+            [&](const EntityId, const NetworkComponent& network, const TransformComponent& transform) {
+                if (network.netId == 0) return;
+                predictedByNetId[network.netId].write(tick, transform.getPosition(), transform.getRotation());
+            });
+    }
 
-            glm::vec3 fromPosition;
-            glm::quat fromRotation;
+    // Both sides describe the same tick, so a body we extrapolated correctly does agree. One we got
+    // wrong has to be put back at the tick it went wrong on and carried forward from there, which is
+    // what the replay is for.
+    bool ReplicationManager::predictionAgrees(const WorldSnapshot& snapshot) const {
+        for (const EntitySnapshot& entity : snapshot.entities) {
+            const auto predicted = predictedByNetId.find(entity.netId);
+            if (predicted == predictedByNetId.end()) return false;
+
             glm::vec3 position;
             glm::quat rotation;
-            dequantizePose(owned.previous, fromPosition, fromRotation);
-            dequantizePose(owned.current, position, rotation);
-            position = glm::mix(fromPosition, position, blend);
-            rotation = glm::slerp(fromRotation, rotation, blend);
+            glm::vec3 linear;
+            glm::vec3 angular;
+            dequantizeState(entity.state, position, rotation, linear, angular);
+            if (!predicted->second.matches(snapshot.tick, position, rotation)) return false;
+        }
+        return true;
+    }
 
-            if (RigidbodyComponent* rigidbody = world.get<RigidbodyComponent>(id)) {
-                rigidbody->driveTo(position, rotation, deltaTime);
-            } else if (TransformComponent* transform = world.get<TransformComponent>(id)) {
-                transform->setPosition(position);
-                transform->setRotation(rotation);
-            }
+    void ReplicationManager::applyStates(const WorldSnapshot& snapshot) {
+        for (const EntitySnapshot& entity : snapshot.entities) {
+            const EntityId id = resolveEntity(entity.netId, entity.hostEntityId);
+            if (id != NULL_ENTITY) applyState(id, entity, snapshot.tick);
+        }
+    }
+
+    // The host's answer describes a tick we have already simulated past, because we deliberately run
+    // ahead of it. Applying it on its own would leave the whole world standing that far in the past,
+    // so put every body back where the host had it and play the buffered input forward again. This
+    // is the only thing that keeps a remote player at the present rather than a round trip behind,
+    // which is what makes colliding with them feel like colliding with a player.
+    void ReplicationManager::rollbackAndReplay(const WorldSnapshot& snapshot) {
+        World& world = engine->getWorld();
+        const Uint64 target = snapshot.tick;
+
+        if (predictionAgrees(snapshot)) {
+            ++predictionsKept;
+            lastResimDepth = 0;
+            return;
+        }
+
+        // Nothing between the packet and us to replay means applying it is the whole job.
+        const bool willReplay = snapshot.complete
+                             && localTick > target && localTick - target <= MaxRollbackTicks;
+
+        // Where everything is drawn right now, so the rewind and the catch-up are hidden together as
+        // one movement rather than as a jump backwards followed by a scramble forwards. Taken before
+        // the snap-only path too: that one moves bodies furthest, so it needs the smoothing most.
+        const float alpha = engine->getRenderAlpha();
+        world.each<RigidbodyComponent>([alpha](const EntityId, RigidbodyComponent& rigidbody) {
+            rigidbody.captureVisualReference(alpha);
         });
+
+        // Before the bodies move onto the snapshot, so the first replayed step solves from the
+        // contacts that belonged to this tick rather than the ones the present left behind.
+        if (willReplay && contactsValid && target >= oldestContactTick && target <= newestContactTick) {
+            physics::PhysicsManager::get().restoreContacts(
+                static_cast<int>(target % physics::PhysicsManager::MaxSavedContacts));
+        }
+
+        applyStates(snapshot);
+
+        if (!willReplay) {
+            if (!snapshot.complete) ++snappedIncomplete;
+            else if (localTick > target) ++snappedTooDeep;
+            lastResimDepth = 0;
+        } else {
+            // Up to but not including localTick: applyReceived runs before this tick is stepped, and
+            // the caller's own simulateStep is what finishes the catch-up.
+            for (Uint64 tick = target + 1; tick < localTick; ++tick) {
+                engine->simulateStep(tick, Engine::FIXED_DT);
+                // The replay rewrites these ticks, so what we recorded and saved for them the first
+                // time through is now wrong. Left stale, the next packet compares against
+                // predictions this correction already invalidated and can never agree, and one
+                // divergence becomes a resimulation on every packet from then on.
+                recordPredictions(tick);
+                saveContacts(tick);
+            }
+            lastResimDepth = static_cast<int>(localTick - target - 1);
+            deepestResim = std::max(deepestResim, lastResimDepth);
+            resimStepsThisWindow += lastResimDepth;
+        }
+
+        world.each<RigidbodyComponent>([alpha](const EntityId, RigidbodyComponent& rigidbody) {
+            rigidbody.applyVisualReference(alpha);
+        });
+    }
+
+    void ReplicationManager::applyState(const EntityId id, const EntitySnapshot& entity, const Uint64 tick) {
+        World& world = engine->getWorld();
+        glm::vec3 position;
+        glm::quat rotation;
+        glm::vec3 linear;
+        glm::vec3 angular;
+        dequantizeState(entity.state, position, rotation, linear, angular);
+
+        // Judged against what we predicted for this same tick, never against where the body stands
+        // now. We deliberately run the whole world ahead of the host, so the distance to the current
+        // pose is mostly that lead, and measuring it would report a large error on a body we
+        // predicted perfectly.
+        ReceivedState& received = lastReceivedByNetId[entity.netId];
+        received.state = entity.state;
+        glm::quat predictedRotation;
+        const auto predicted = predictedByNetId.find(entity.netId);
+        received.hadPrediction = predicted != predictedByNetId.end()
+                              && predicted->second.poseAt(tick, received.predicted, predictedRotation);
+        if (received.hadPrediction) {
+            const float error = glm::distance(received.predicted, position);
+            correction.total += error;
+            correction.totalAngle += angleBetween(predictedRotation, rotation);
+            ++correction.count;
+            if (error > CorrectionMarkerMinimum) {
+                correctionMarkers.push_back({ received.predicted, position, localTick });
+            }
+        }
+
+        if (RigidbodyComponent* rigidbody = world.get<RigidbodyComponent>(id)) {
+            rigidbody->setState(position, rotation, linear, angular, entity.state.atRest);
+        } else if (TransformComponent* transform = world.get<TransformComponent>(id)) {
+            transform->setPosition(position);
+            transform->setRotation(rotation);
+        }
     }
 
     EntityId ReplicationManager::resolveEntity(const uint32_t netId, const uint32_t hostEntityId) {
@@ -537,82 +981,32 @@ namespace ytail::net {
         return hostEntityId;
     }
 
-    void ReplicationManager::applyInterpolated(const float deltaTime) {
-        if (receivedHistory.size() < 2) return;
-
-        const WorldSnapshot* from = nullptr;
-        const WorldSnapshot* to = nullptr;
-        for (size_t i = 1; i < receivedHistory.size(); ++i) {
-            if (static_cast<double>(receivedHistory[i].tick) >= playbackTick) {
-                from = &receivedHistory[i - 1];
-                to = &receivedHistory[i];
-                break;
-            }
-        }
-        // Playback has run past everything buffered; hold the last pose rather than extrapolate.
-        if (from == nullptr) return;
-
-        const double span = static_cast<double>(to->tick) - static_cast<double>(from->tick);
-        const float blend = span > 0.0
-            ? static_cast<float>(std::clamp((playbackTick - static_cast<double>(from->tick)) / span, 0.0, 1.0))
-            : 1.0f;
-
+    // Held briefly rather than applied on arrival: packets clump, and a clump puts objects from
+    // different packets out of phase in time, which pops anything stacked on something else.
+    // reference: https://www.gafferongames.com/post/state_synchronization/
+    void ReplicationManager::applyBufferedState() {
         World& world = engine->getWorld();
-        for (const EntitySnapshot& target : to->entities) {
-            const EntityId id = resolveEntity(target.netId, target.hostEntityId);
-            if (id == NULL_ENTITY) continue;
+        // Applied in place rather than consumed, so a duplicate arriving later still finds its tick
+        // and is recognised. appliedTick stops one being applied twice, and stops a reordered older
+        // packet dragging the world backwards.
+        for (const WorldSnapshot& snapshot : receivedHistory) {
+            if (snapshot.tick <= appliedTick) continue;
+            // Released at a fixed transit rather than after a fixed wait, so however unevenly
+            // packets arrive they are applied evenly: an early one waits, a late one goes straight
+            // through.
+            if (localTick < snapshot.tick + jitter.target) break;
 
-            NetworkComponent* network = world.get<NetworkComponent>(id);
-            if (network == nullptr) continue;
-            network->ownerPeerId = target.ownerPeerId;
-            if (target.ownerPeerId == localPeerId && localPeerId != 0) continue;
-
-            glm::vec3 position;
-            glm::quat rotation;
-            dequantizePose(target.pose, position, rotation);
-
-            if (const EntitySnapshot* previous = from->find(target.netId)) {
-                glm::vec3 fromPosition;
-                glm::quat fromRotation;
-                dequantizePose(previous->pose, fromPosition, fromRotation);
-                position = glm::mix(fromPosition, position, blend);
-                rotation = glm::slerp(fromRotation, rotation, blend);
+            for (const EntitySnapshot& entity : snapshot.entities) {
+                const EntityId id = resolveEntity(entity.netId, entity.hostEntityId);
+                if (id == NULL_ENTITY) continue;
+                if (NetworkComponent* network = world.get<NetworkComponent>(id)) {
+                    network->ownerPeerId = entity.ownerPeerId;
+                }
             }
 
-            if (RigidbodyComponent* rigidbody = world.get<RigidbodyComponent>(id)) {
-                rigidbody->setNetworkDriven(true);
-                rigidbody->driveTo(position, rotation, deltaTime);
-            } else if (TransformComponent* transform = world.get<TransformComponent>(id)) {
-                transform->setPosition(position);
-                transform->setRotation(rotation);
-            }
+            rollbackAndReplay(snapshot);
+            appliedTick = snapshot.tick;
         }
-    }
-
-    void ReplicationManager::advanceClock() {
-        if (receivedHistory.empty()) return;
-        const double target =
-            static_cast<double>(newestReceivedTick)
-            - static_cast<double>(SnapshotSendInterval) * InterpolationDelayIntervals;
-        if (!clockStarted) {
-            playbackTick = target;
-            clockStarted = true;
-            return;
-        }
-        // Slewed, never snapped: jumping the clock shows up as a visible time warp.
-        playbackTick += 1.0 + std::clamp((target - playbackTick) * 0.05, -0.25, 0.25);
-
-        const auto drift = static_cast<float>(static_cast<double>(newestReceivedTick) - playbackTick);
-        smoothedDrift = smoothedDrift * 0.95f + drift * 0.05f;
-        driftHistory[driftHistoryIndex] = drift;
-        driftHistoryIndex = (driftHistoryIndex + 1) % static_cast<int>(driftHistory.size());
-    }
-
-    const WorldSnapshot* ReplicationManager::findSent(const Uint64 tick) const {
-        for (const WorldSnapshot& snapshot : sentHistory) {
-            if (snapshot.tick == tick) return &snapshot;
-        }
-        return nullptr;
     }
 
     const WorldSnapshot* ReplicationManager::findReceived(const Uint64 tick) const {
@@ -622,29 +1016,65 @@ namespace ytail::net {
         return nullptr;
     }
 
-    void ReplicationManager::drawSnapshotGhosts(DebugDraw& debug) const {
-        if (!showGhosts || !isBound() || receivedHistory.empty()) return;
-
-        const WorldSnapshot& newest = receivedHistory.back();
+    void ReplicationManager::drawNetDebug(DebugDraw& debug) const {
+        if (!isBound()) return;
         const World& world = engine->getWorld();
-        for (const EntitySnapshot& entity : newest.entities) {
-            const auto mapped = entityByNetId.find(entity.netId);
-            if (mapped == entityByNetId.end()) continue;
-            const TransformComponent* transform = world.get<TransformComponent>(mapped->second);
-            if (transform == nullptr) continue;
 
-            glm::vec3 rawPosition;
-            glm::quat rawRotation;
-            dequantizePose(entity.pose, rawPosition, rawRotation);
-            const glm::vec3 shown = glm::vec3(transform->worldMatrix()[3]);
+        if (showGhosts) {
+            for (const auto& [netId, received] : lastReceivedByNetId) {
+                const auto mapped = entityByNetId.find(netId);
+                if (mapped == entityByNetId.end()) continue;
+                const RigidbodyComponent* rigidbody = world.get<RigidbodyComponent>(mapped->second);
+                const TransformComponent* transform = world.get<TransformComponent>(mapped->second);
+                if (transform == nullptr) continue;
 
-            debug.wireSphere(rawPosition, 0.25f, glm::vec4(1.0f, 0.3f, 0.3f, 1.0f), 12);
-            debug.line(rawPosition, shown, glm::vec4(1.0f, 1.0f, 0.3f, 1.0f));
+                glm::vec3 hostPosition;
+                glm::quat hostRotation;
+                glm::vec3 hostLinear;
+                glm::vec3 hostAngular;
+                dequantizeState(received.state, hostPosition, hostRotation, hostLinear, hostAngular);
+
+                // The error line runs to where we had this body at the tick the ghost describes, not
+                // to where it stands now. A ghost trails the body by the clock lead plus the trip
+                // plus the jitter hold whatever happens, and none of that is error: only the gap to
+                // the prediction is. Green while we agree, red as that gap opens.
+                const float divergence = received.hadPrediction
+                    ? glm::distance(hostPosition, received.predicted) : 0.0f;
+                const float scaled = glm::clamp(divergence / DivergenceFullScale, 0.0f, 1.0f);
+                const glm::vec4 color(scaled, 1.0f - scaled, 0.2f, 1.0f);
+
+                debug.wireSphere(hostPosition, 0.25f, color, 12);
+                if (received.hadPrediction) debug.line(hostPosition, received.predicted, color);
+                // Where the host thinks it is heading. A ghost sitting still while our copy moves
+                // means the host is not applying the input that is driving it here.
+                if (!received.state.atRest) {
+                    debug.arrow(hostPosition, hostPosition + hostLinear * 0.25f,
+                                glm::vec4(0.4f, 0.7f, 1.0f, 1.0f));
+                }
+
+                // The lie: simulated pose to drawn pose. Long means a big correction is mid-fade.
+                if (showVisualOffset && rigidbody != nullptr) {
+                    const glm::vec3 simulated = transform->getPosition();
+                    const glm::vec3 drawn = simulated + rigidbody->getVisualPositionError();
+                    debug.line(simulated, drawn, glm::vec4(1.0f, 0.9f, 0.2f, 1.0f));
+                    debug.wireSphere(drawn, 0.12f, glm::vec4(1.0f, 0.9f, 0.2f, 1.0f), 8);
+                }
+            }
+        }
+
+        if (showCorrections) {
+            for (const CorrectionMarker& marker : correctionMarkers) {
+                const Uint64 age = localTick - marker.tick;
+                const float fade = 1.0f - static_cast<float>(age) / static_cast<float>(CorrectionMarkerTicks);
+                debug.arrow(marker.from, marker.to, glm::vec4(1.0f, 0.2f, 0.8f, fade));
+            }
         }
     }
 
     static void ownerLabel(const uint32_t peerId, char* buffer, const size_t size) {
-        if (peerId == 0) {
+        if (peerId == ReplicationManager::NoOwner) {
+            SDL_strlcpy(buffer, "nobody", size);
+        } else if (peerId == ReplicationManager::HostPeerId) {
             SDL_strlcpy(buffer, "host", size);
         } else {
             SDL_snprintf(buffer, size, "peer %u", peerId);
@@ -658,24 +1088,23 @@ namespace ytail::net {
         const bool hosting = peer->isHosting();
         std::vector<uint32_t> peerIds;
         if (hosting) {
-            peerIds.reserve(clients.size() + 1);
-            peerIds.push_back(0);
+            peerIds.reserve(clients.size() + 2);
+            peerIds.push_back(NoOwner);
+            peerIds.push_back(HostPeerId);
             for (const auto& [connection, client] : clients) peerIds.push_back(client.peerId);
             std::sort(peerIds.begin(), peerIds.end());
         }
         // Applied after the pass: setOwner touches the component the iteration is walking.
         EntityId reassignEntity = NULL_ENTITY;
-        uint32_t reassignPeerId = 0;
+        uint32_t reassignPeerId = NoOwner;
 
-        if (ImGui::BeginTable("netentities", 4,
+        if (ImGui::BeginTable("netentities", 3,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("Net Id");
             ImGui::TableSetupColumn("Owner");
-            ImGui::TableSetupColumn("Authority");
-            ImGui::TableSetupColumn("Body");
+            ImGui::TableSetupColumn("Motion");
             ImGui::TableHeadersRow();
 
-            const char* authorityNames[] = { "Host", "Owner", "Remote" };
             World& world = engine->getWorld();
             world.each<NetworkComponent>([&](const EntityId id, const NetworkComponent& network) {
                 ImGui::TableNextRow();
@@ -683,11 +1112,9 @@ namespace ytail::net {
                 ImGui::Text("%u", network.netId);
                 ImGui::TableNextColumn();
                 if (!hosting) {
-                    if (network.ownerPeerId == 0) {
-                        ImGui::TextUnformatted("host");
-                    } else {
-                        ImGui::Text("peer %u", network.ownerPeerId);
-                    }
+                    char label[16];
+                    ownerLabel(network.ownerPeerId, label, sizeof(label));
+                    ImGui::TextUnformatted(label);
                 } else {
                     char current[16];
                     ownerLabel(network.ownerPeerId, current, sizeof(current));
@@ -707,13 +1134,11 @@ namespace ytail::net {
                     ImGui::PopID();
                 }
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(authorityNames[static_cast<int>(network.authority)]);
-                ImGui::TableNextColumn();
                 const RigidbodyComponent* rigidbody = world.get<RigidbodyComponent>(id);
                 if (rigidbody == nullptr) {
                     ImGui::TextUnformatted("-");
                 } else {
-                    ImGui::TextUnformatted(rigidbody->isNetworkDriven() ? "driven" : "simulated");
+                    ImGui::TextUnformatted(rigidbody->isAtRest() ? "at rest" : "moving");
                 }
             });
             ImGui::EndTable();
@@ -727,46 +1152,99 @@ namespace ytail::net {
 
         ImGui::Text("Bandwidth: %.1f KB/s out, %.1f KB/s in",
                     sentBytes.bytesPerSecond / 1024.0f, receivedBytes.bytesPerSecond / 1024.0f);
-        ImGui::Checkbox("Show snapshot ghosts", &showGhosts);
+        ImGui::Checkbox("Ghosts (host state)", &showGhosts);
+        ImGui::SameLine();
+        ImGui::Checkbox("Corrections", &showCorrections);
+        ImGui::SameLine();
+        ImGui::Checkbox("Visual offset", &showVisualOffset);
+        if (showCorrections) {
+            ImGui::Text("%d markers live", static_cast<int>(correctionMarkers.size()));
+        }
         ImGui::Separator();
 
         if (peer->isHosting()) {
-            ImGui::Text("Peer id: host");
-            ImGui::Text("Replicated: %d entities, %d snapshots buffered",
-                        lastSnapshotEntities, static_cast<int>(sentHistory.size()));
+            ImGui::Text("Peer id: host (%u)", localPeerId);
+            ImGui::Text("Replicated: %d entities", lastSnapshotEntities);
             for (const auto& [connection, client] : clients) {
                 if (!ImGui::TreeNode(reinterpret_cast<void*>(static_cast<uintptr_t>(connection)),
-                                     "conn %u  %d B  %d changed%s", connection, client.lastSentBytes,
-                                     client.lastChangedEntities, client.lastSendWasFull ? "  FULL" : "")) {
+                                     "conn %u  peer %u  %d B  %d sent", connection, client.peerId,
+                                     client.lastSentBytes, client.lastSentEntities)) {
                     continue;
                 }
                 ImGui::Text("Acked tick: %llu", static_cast<unsigned long long>(client.ackedTick));
-                if (client.awaitingBaseline()) {
-                    ImGui::Text("Awaiting baseline %llu",
-                                static_cast<unsigned long long>(client.pendingBaselineTick));
+                // Skipped is the budget doing its job. Ticks since sent is whether it is fair:
+                // a number that keeps climbing means something is starving.
+                ImGui::Text("Skipped by budget: %d", client.lastSkippedEntities);
+                ImGui::Text("Worst ticks since sent: %llu",
+                            static_cast<unsigned long long>(client.worstTicksSinceSent));
+                ImGui::Text("Input lead: %d ticks", client.inputLead);
+                if (client.lastSentBytes > SoftPacketBytes) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                                       "Packet exceeds %d B and will fragment", SoftPacketBytes);
                 }
-                // More than one means fragments, and an unreliable snapshot is lost if any is.
-                ImGui::Text("Fragments: ~%d",
-                            (client.lastSentBytes + SoftPacketBytes - 1) / SoftPacketBytes);
-                ImGui::Text("Full snapshots sent: %d", client.fullSnapshotsSent);
                 ImGui::TreePop();
+            }
+            // Age is expected to sit near our lead plus the trip from the host: we simulate ahead
+            // of the input we hold for anyone else. Growing without bound means they stopped
+            // sending. starved counts only ticks driven with nothing at all.
+            for (const auto& [peerId, history] : inputByPeer) {
+                ImGui::Text("peer %u input: %lld ticks old, %d starved", peerId,
+                            static_cast<long long>(static_cast<int64_t>(localTick) - static_cast<int64_t>(history.newestTick)),
+                            history.starved);
             }
         } else {
             ImGui::Text("Peer id: %u", localPeerId);
             ImGui::Text("Newest tick: %llu", static_cast<unsigned long long>(newestReceivedTick));
-            ImGui::Text("Playback tick: %.1f", playbackTick);
-            // Sawtooths by one send interval, so this is smoothed. Climbing means the clock is losing.
-            ImGui::Text("Drift: %.1f ticks (target %.1f)", smoothedDrift,
-                        static_cast<double>(SnapshotSendInterval) * InterpolationDelayIntervals);
-            ImGui::PlotLines("##drift", driftHistory.data(), static_cast<int>(driftHistory.size()),
-                             driftHistoryIndex, nullptr, 0.0f,
-                             static_cast<float>(SnapshotSendInterval) * InterpolationDelayIntervals * 2.0f,
-                             ImVec2(0.0f, 40.0f));
-            ImGui::Text("Buffered: %d snapshots", static_cast<int>(receivedHistory.size()));
+            ImGui::Text("Applied tick: %llu (%llu behind)",
+                        static_cast<unsigned long long>(appliedTick),
+                        static_cast<unsigned long long>(newestReceivedTick - appliedTick));
+            // How far each snap moves a body. Near zero means the local sim agreed with the host;
+            // this is the number every prediction change is judged against.
+            ImGui::Text("Correction: %.3f m mean, %.3f m peak, %.1f deg mean",
+                        correction.mean, correction.peak, glm::degrees(correction.meanAngle));
+            ImGui::PlotLines("##correction", correctionHistory.data(),
+                             static_cast<int>(correctionHistory.size()), correctionHistoryIndex,
+                             nullptr, 0.0f, 0.5f, ImVec2(0.0f, 40.0f));
+            // The hold is what the connection asked for, not what it was configured with. It rises
+            // the moment a packet lands later than the current one covers and eases back down.
+            // Worst transit sitting far above it means the estimator has shrunk since the spike.
+            ImGui::Text("Buffered: %d packets, holding %llu ticks (worst transit %llu)",
+                        static_cast<int>(receivedHistory.size()),
+                        static_cast<unsigned long long>(jitter.target),
+                        static_cast<unsigned long long>(jitter.worstTransit));
+            // Should sit at the target. Drifting below it means our input is reaching the host
+            // late and it is having to guess; the clock steering is what holds it there.
+            ImGui::Text("Input lead: %d ticks (target %d, %llu of it delay), %d clock adjustments",
+                        measuredInputLead, inputLeadTarget(),
+                        static_cast<unsigned long long>(inputDelayTicks), clockAdjustments);
+            ImGui::Text("Seeded lead from ping: %llu ticks",
+                        static_cast<unsigned long long>(leadFromPing()));
+            ImGui::SeparatorText("Resimulation");
+            // Extra physics on top of the one step a tick normally runs, so 60 here means the
+            // simulation is doing twice the work.
+            ImGui::Text("Replayed steps: %.0f/s, last %d deep, worst %d",
+                        resimStepsPerSecond, lastResimDepth, deepestResim);
+            // High is good: the prediction was already right and nothing had to be replayed.
+            ImGui::Text("Prediction kept: %d packets", predictionsKept);
+            if (snappedTooDeep > 0 || snappedIncomplete > 0) {
+                // Each of these left the world a rollback's worth of time in the past.
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                                   "Snapped without replay: %d too deep, %d incomplete",
+                                   snappedTooDeep, snappedIncomplete);
+            }
+
+            drawTuning();
             ImGui::Text("Mapped entities: %d", static_cast<int>(entityByNetId.size()));
-            // Zero while nothing moves is delta compression working.
-            ImGui::Text("Changed last snapshot: %d", lastReceivedChanged);
-            ImGui::Text("Dropped (no baseline): %d", droppedForMissingBaseline);
+            // Zero while nothing moves is at-rest detection working.
+            ImGui::Text("Entities in last packet: %d", lastReceivedChanged);
+            // Age is expected to sit near our lead plus the trip from the host: we simulate ahead
+            // of the input we hold for anyone else. Growing without bound means they stopped
+            // sending. starved counts only ticks driven with nothing at all.
+            for (const auto& [peerId, history] : inputByPeer) {
+                ImGui::Text("peer %u input: %lld ticks old, %d starved", peerId,
+                            static_cast<long long>(static_cast<int64_t>(localTick) - static_cast<int64_t>(history.newestTick)),
+                            history.starved);
+            }
         }
 
         drawEntityTable();
