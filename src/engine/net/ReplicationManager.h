@@ -8,6 +8,8 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <fstream>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -191,6 +193,11 @@ namespace ytail::net {
         void onConnected(uint32_t connection);
         void onDisconnected(uint32_t connection);
         void drawDebugUI();
+
+        // Appends every replicated body's pose, as this peer sees it, once per tick. Joining two
+        // peers' traces on (tick, netId) is the only way to ask "did A predict B correctly" without
+        // watching two windows and guessing. No-op until a path is supplied.
+        void openTrace(const std::string& path);
         // Ghost of the last state the host sent for each entity, the divergence from where we have
         // it, the offset being hidden from the eye, and a fading marker for each correction.
         void drawNetDebug(DebugDraw& debug) const;
@@ -341,6 +348,7 @@ namespace ytail::net {
 
         [[nodiscard]] const WorldSnapshot* findReceived(Uint64 tick) const;
         void sampleBandwidth();
+        void writeTrace(Uint64 tick);
         void sampleCorrection();
         // Runtime sliders for the rates and the smoothing, drawn inside debugUI.
         void drawTuning();
@@ -414,6 +422,7 @@ namespace ytail::net {
         Uint64 correctionWindowStartMs = 0;
         BandwidthMeter sentBytes;
         BandwidthMeter receivedBytes;
+        std::ofstream traceFile;
     };
 } // ytail::net
 

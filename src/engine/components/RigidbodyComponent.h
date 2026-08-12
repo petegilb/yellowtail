@@ -21,13 +21,13 @@ namespace ytail {
         // rate ramps between the two across the small..large range rather than stepping at a
         // threshold. Under sustained lag large errors are the common case, so this is the first pair
         // to try inverting if remote players slide rather than jitter.
-        float smallDecay = 0.95f;
+        float smallDecay = 0.96f;
         float largeDecay = 0.94f;
         float smallError = 0.25f;
         float largeError = 1.0f;
         // Rotation ramps over its own range, because it diverges independently: a ball can sit in
         // the right place while its spin is visibly wrong. 10 to 90 degrees.
-        float smallRotation = 0.175f;
+        float smallRotation = glm::radians(45.f);
         float largeRotation = 1.571f;
     };
 

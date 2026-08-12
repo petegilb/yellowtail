@@ -68,6 +68,12 @@ namespace ytail::physics {
     public:
         static PhysicsManager& get();
 
+        // Solves on the calling thread instead of the job pool. Jolt splits contact resolution
+        // across workers, so the order it lands in varies run to run and one machine does not even
+        // reproduce itself exactly. Automated tests need runs they can diff, so they pay for it in
+        // speed. Must be called before the first get(), since the pool is built with the world.
+        static void setSingleThreaded(bool singleThreaded);
+
         // advance the simulation by a fixed dt (collisionSteps = Jolt sub-steps, 1 is fine at 60Hz)
         void step(float deltaTime, int collisionSteps = 1);
 

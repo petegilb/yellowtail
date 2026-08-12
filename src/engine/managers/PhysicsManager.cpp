@@ -166,12 +166,19 @@ namespace {
 }
 
 namespace ytail::physics {
+    // Read once, when the world is built. Zero workers means Jolt runs its jobs on the calling
+    // thread while it waits on a barrier, which is what makes a run reproducible.
+    bool singleThreadedPhysics = false;
+
+    int physicsWorkerThreads() {
+        if (singleThreadedPhysics) return 0;
+        // Leave one core for the main thread.
+        return std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 1);
+    }
+
     struct PhysicsManager::Impl {
         TempAllocatorImpl tempAllocator{ 10 * 1024 * 1024 }; // 10 MiB scratch for the solver
-        JobSystemThreadPool jobSystem{
-            cMaxPhysicsJobs, cMaxPhysicsBarriers,
-            std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 1) // leave one core for the main thread
-        };
+        JobSystemThreadPool jobSystem{ cMaxPhysicsJobs, cMaxPhysicsBarriers, physicsWorkerThreads() };
 
         BPLayerInterfaceImpl broadPhaseLayerInterface;
         ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhaseLayerFilter;
@@ -188,6 +195,10 @@ namespace ytail::physics {
     PhysicsManager& PhysicsManager::get() {
         static PhysicsManager instance;
         return instance;
+    }
+
+    void PhysicsManager::setSingleThreaded(const bool singleThreaded) {
+        singleThreadedPhysics = singleThreaded;
     }
 
     PhysicsManager::PhysicsManager() {

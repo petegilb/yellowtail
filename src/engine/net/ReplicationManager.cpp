@@ -38,7 +38,7 @@ namespace ytail::net {
     int ReplicationManager::jitterWindowPackets = 30;
     // Two ticks absorbs the clock lead on a local connection, leaving every peer on the same tick at
     // the same moment with two ticks of margin for the hop itself.
-    Uint64 ReplicationManager::inputDelayTicks = 8;
+    Uint64 ReplicationManager::inputDelayTicks = 4;
     // 5cm, well inside a ball and far looser than the 2mm the wire can express. Tight enough that a
     // real divergence is caught, loose enough that solver noise is not mistaken for one.
     float ReplicationManager::predictionTolerance = 0.05f;
@@ -157,6 +157,33 @@ namespace ytail::net {
         target = std::min(target, ReplicationManager::MaxJitterTicks);
     }
 
+    void ReplicationManager::openTrace(const std::string& path) {
+        traceFile.open(path, std::ios::trunc);
+        if (!traceFile.is_open()) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not open net trace %s", path.c_str());
+            return;
+        }
+        traceFile << "tick,peer,netId,owner,x,y,z,qx,qy,qz,qw\n";
+        SDL_Log("Writing net trace to %s", path.c_str());
+    }
+
+    // This peer's own view, not the host's. Comparing a peer's line for a body against the line the
+    // body's owner wrote for the same tick is the prediction error, straight out.
+    void ReplicationManager::writeTrace(const Uint64 tick) {
+        if (!traceFile.is_open()) return;
+        engine->getWorld().each<NetworkComponent, TransformComponent>(
+            [&](const EntityId, const NetworkComponent& network, const TransformComponent& transform) {
+                if (network.netId == 0) return;
+                const glm::vec3 position = transform.getPosition();
+                const glm::quat rotation = transform.getRotation();
+                traceFile << tick << ',' << localPeerId << ',' << network.netId << ','
+                          << network.ownerPeerId << ','
+                          << position.x << ',' << position.y << ',' << position.z << ','
+                          << rotation.x << ',' << rotation.y << ',' << rotation.z << ',' << rotation.w
+                          << '\n';
+            });
+    }
+
     void ReplicationManager::sampleBandwidth() {
         const Uint64 now = SDL_GetTicks();
         for (BandwidthMeter* meter : { &sentBytes, &receivedBytes }) {
@@ -220,8 +247,8 @@ namespace ytail::net {
         }
     }
 
-    // One way trip in ticks, plus the margin we want to keep. Falls back to the fixed guess while
-    // the backend has no estimate, which is the case for the first moments of a connection.
+    // How far ahead of the host the clock should start. Falls back to the fixed guess while the
+    // backend has no estimate, which is the case for the first moments of a connection.
     Uint64 ReplicationManager::leadFromPing() const {
         const std::vector<uint32_t>& connections = peer->getConnections();
         if (connections.empty()) return InitialInputLead;
@@ -230,11 +257,13 @@ namespace ytail::net {
 
         const auto oneWayTicks = static_cast<Uint64>(
             std::ceil((static_cast<float>(pingMs) * 0.5f) / (Engine::FIXED_DT * 1000.0f)));
-        // Seeded where the steering will hold it, so the clock does not start somewhere it will
-        // immediately be dragged away from. The delay is head start the clock does not have to
-        // provide, so it comes back off the target here.
-        const auto fromDelay = static_cast<Uint64>(inputLeadTarget()) - inputDelayTicks;
-        return std::clamp<Uint64>(oneWayTicks + fromDelay, 0, MaxInputLeadTicks);
+        // The delay already gives our input this much of a head start, so the clock only has to
+        // make up whatever is left of the trip. Seeding the full trip regardless stacks the two
+        // instead of letting one displace the other, and the two are not interchangeable: the host
+        // is served equally well by either, but every tick of clock lead is a tick further ahead of
+        // the host than we can ever predict it, while every tick of delay costs nothing there.
+        const Uint64 fromClock = oneWayTicks > inputDelayTicks ? oneWayTicks - inputDelayTicks : 0;
+        return std::clamp<Uint64>(fromClock, 0, MaxInputLeadTicks);
     }
 
     // How far ahead of the host our input has to be stamped: clock lead and delay together, which
@@ -342,6 +371,7 @@ namespace ytail::net {
     void ReplicationManager::capture(const Uint64 tick) {
         if (!isBound() || !peer->isActive()) return;
         sampleBandwidth();
+        writeTrace(tick);
         if (peer->isHosting()) {
             // Every tick, separately from state. Clients simulate each other's balls from these, so
             // forwarding them at the state rate left them acting on input a whole send interval
