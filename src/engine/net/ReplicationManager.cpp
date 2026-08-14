@@ -92,6 +92,12 @@ namespace ytail::net {
         // Only forwards: a redundant copy of a frame we already hold must not overwrite a newer one
         // that happens to share the slot.
         if (ticks[slot] > tick) return;
+
+        // We already simulated this tick, and with something other than what actually happened. The
+        // press is not lost, it just arrived late, and the tick it belongs to is right here.
+        if (usedTicks[slot] == tick && !(used[slot] == frame) && ticks[slot] != tick) {
+            mispredictedTick = mispredictedTick == 0 ? tick : std::min(mispredictedTick, tick);
+        }
         ticks[slot] = tick;
         frames[slot] = frame;
         newestTick = std::max(newestTick, tick);
@@ -102,30 +108,34 @@ namespace ytail::net {
         return ticks[slot] == tick ? frames[slot] : NetInputFrame{};
     }
 
+    // Records what it hands back, so a frame arriving later for this tick can be recognised as
+    // contradicting a guess rather than simply filed away.
     NetInputFrame InputHistory::read(const Uint64 tick) {
         const size_t slot = tick % Length;
-        if (ticks[slot] == tick) return frames[slot];
+        usedTicks[slot] = tick;
+        if (ticks[slot] == tick) {
+            used[slot] = frames[slot];
+            return frames[slot];
+        }
 
         // Nothing for this tick, so hold the newest one we do have. This is the normal case for
         // another player: we run ahead of the host, so their input is always behind our simulation
         // and every tick of theirs is extrapolated. Only giving up entirely counts as starvation.
-        if (newestTick == 0 || tick < newestTick) {
+        if (newestTick == 0 || tick < newestTick
+            || tick - newestTick > ReplicationManager::MaxInputStaleTicks) {
             ++starved;
-            return {};
-        }
-        if (tick - newestTick > ReplicationManager::MaxInputStaleTicks) {
-            ++starved;
+            used[slot] = NetInputFrame{};
             return {};
         }
         const size_t newestSlot = newestTick % Length;
         if (ticks[newestSlot] != newestTick) return {};
 
+        // Every button is held rather than pulsed, precisely so carrying one forward is harmless:
+        // a bit that means "I am holding this" is still true a tick later, and one that meant
+        // "pressed just now" would have been lost here every time a peer's input ran late.
         ++repeated;
-        // Held bits carry forward, edges do not: this frame is standing in for a tick it was not
-        // sent for, and an edge belongs to the one tick it was actually pressed on.
-        NetInputFrame carried = frames[newestSlot];
-        carried.buttons &= ~NetInputFrame::edgeButtons;
-        return carried;
+        used[slot] = frames[newestSlot];
+        return frames[newestSlot];
     }
 
     // Shortest angle between two orientations. The absolute value folds q and -q together, which
@@ -228,18 +238,13 @@ namespace ytail::net {
         const Uint64 target = tick + inputDelayTicks;
 
         // Raising the delay steps over a tick, which every peer would otherwise read as a moment of
-        // no input at all. The gap is filled with the held buttons only: an edge belongs to the one
-        // tick it was pressed on, and copying it across the gap would fire it once per filled tick
-        // on every machine that reads them back as real frames.
-        NetInputFrame held;
-        held.buttons = frame.buttons & ~NetInputFrame::edgeButtons;
+        // no input at all. Filling it with this frame is what carrying one forward would have given.
         Uint64 first = target;
         if (history.newestTick > 0 && history.newestTick < target
             && target - history.newestTick <= InputHistory::Length) {
             first = history.newestTick + 1;
         }
-        for (Uint64 fill = first; fill < target; ++fill) history.write(fill, held);
-        history.write(target, frame);
+        for (Uint64 fill = first; fill <= target; ++fill) history.write(fill, frame);
     }
 
     // The delay has to cover the trip this peer's input takes to whoever simulates its body, and the
@@ -947,6 +952,7 @@ namespace ytail::net {
         inputByPeer.clear();
         dialledPeers.clear();
         predictedByNetId.clear();
+        hasLastApplied = false;
         contactsValid = false;
         lastResimDepth = 0;
         clockCooldown = 0;
@@ -1113,6 +1119,7 @@ namespace ytail::net {
         if (peer->isHosting()) return;
         if (newestReceivedTick == 0) return;
         applyBufferedState();
+        replayLateInput();
     }
 
     // Kept per tick alongside the predictions, and for the same reason: a replay has to start from
@@ -1156,6 +1163,28 @@ namespace ytail::net {
         return true;
     }
 
+    // The input we simulated a tick with turned out to be wrong, and we know exactly which tick. The
+    // only authoritative state we keep is the last snapshot we applied, so the replay starts there
+    // rather than at the offending tick: a few extra steps, against needing a saved body state for
+    // every tick to do better.
+    void ReplicationManager::replayLateInput() {
+        Uint64 earliest = 0;
+        for (auto& [peerId, history] : inputByPeer) {
+            if (history.mispredictedTick != 0 && (earliest == 0 || history.mispredictedTick < earliest)) {
+                earliest = history.mispredictedTick;
+            }
+            history.mispredictedTick = 0;
+        }
+        if (earliest == 0 || !hasLastApplied) return;
+        // Already covered: the snapshot we would replay from is newer than the tick that went wrong,
+        // so the host has since told us what actually happened there.
+        if (earliest <= lastApplied.tick) return;
+        if (localTick <= lastApplied.tick || localTick - lastApplied.tick > MaxRollbackTicks) return;
+
+        ++lateInputReplays;
+        rollbackAndReplay(lastApplied, true);
+    }
+
     void ReplicationManager::applyStates(const WorldSnapshot& snapshot) {
         for (const EntitySnapshot& entity : snapshot.entities) {
             const EntityId id = resolveEntity(entity.netId, entity.hostEntityId);
@@ -1168,12 +1197,12 @@ namespace ytail::net {
     // so put every body back where the host had it and play the buffered input forward again. This
     // is the only thing that keeps a remote player at the present rather than a round trip behind,
     // which is what makes colliding with them feel like colliding with a player.
-    void ReplicationManager::rollbackAndReplay(const WorldSnapshot& snapshot) {
+    void ReplicationManager::rollbackAndReplay(const WorldSnapshot& snapshot, const bool force) {
         World& world = engine->getWorld();
         const Uint64 target = snapshot.tick;
 
         ++predictionsChecked;
-        if (predictionAgrees(snapshot)) {
+        if (!force && predictionAgrees(snapshot)) {
             ++predictionsKept;
             lastResimDepth = 0;
             return;
@@ -1332,6 +1361,8 @@ namespace ytail::net {
 
             rollbackAndReplay(snapshot);
             appliedTick = snapshot.tick;
+            lastApplied = snapshot;
+            hasLastApplied = true;
             tickFlags |= NetGraphApplied;
         }
     }
@@ -1627,6 +1658,9 @@ namespace ytail::net {
                         resimStepsPerSecond, lastResimDepth, deepestResim);
             // High is good: the prediction was already right and nothing had to be replayed.
             ImGui::Text("Prediction kept: %d packets", predictionsKept);
+            // Replays driven by a peer's input landing after we had already guessed that tick. A
+            // press cannot be recovered any other way: the tick it belongs to is behind us.
+            ImGui::Text("Late input replays: %d", lateInputReplays);
             if (snappedTooDeep > 0 || snappedIncomplete > 0) {
                 // Each of these left the world a rollback's worth of time in the past.
                 ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),

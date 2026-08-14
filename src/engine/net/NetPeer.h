@@ -6,6 +6,7 @@
 #define YELLOWTAIL_NETPEER_H
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include "engine/NetSimSettings.h"
@@ -93,8 +94,10 @@ namespace ytail::net {
 
         // Round trip time in milliseconds, or -1 if the backend has no estimate yet
         [[nodiscard]] int getPingMs(uint32_t connection) const;
+        // Steam ID on the other end, or 0 on the local transport where every instance shares one.
+        [[nodiscard]] uint64_t getRemoteId(uint32_t connection) const;
         // False when the backend has nothing for this connection, leaving stats untouched.
-        [[nodiscard]] bool getStats(uint32_t connection, NetConnectionStats& stats) const;
+        bool getStats(uint32_t connection, NetConnectionStats& stats) const;
 
         [[nodiscard]] bool isActive() const { return active; }
         [[nodiscard]] bool isHosting() const { return hosting; }
@@ -127,6 +130,8 @@ namespace ytail::net {
         NetSimSettings netSim;
 
         std::vector<uint32_t> connections;
+        // Who is on each connection, so the same account cannot hold two at once
+        std::unordered_map<uint32_t, uint64_t> remoteIds;
         uint32_t listenSocket = 0;
         uint32_t pollGroup = 0;
         uint64_t peerAddress = 0;

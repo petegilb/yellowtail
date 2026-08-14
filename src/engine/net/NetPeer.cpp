@@ -79,6 +79,13 @@ namespace ytail::net {
         return 1;
     }
 
+    uint64_t NetPeer::getRemoteId(const uint32_t connection) const {
+        if (sockets == nullptr) return 0;
+        SteamNetConnectionInfo_t info{};
+        if (!sockets->GetConnectionInfo(connection, &info)) return 0;
+        return info.m_identityRemote.GetSteamID64();
+    }
+
     void NetPeer::ensurePollGroup() {
         if (pollGroup == k_HSteamNetPollGroup_Invalid) pollGroup = sockets->CreatePollGroup();
     }
@@ -237,10 +244,23 @@ namespace ytail::net {
                 // Only an inbound request on our listen socket needs accepting; our own outbound
                 // connect also passes through Connecting and is left alone.
                 if (inboundFromListen) {
+                    const uint64_t remote = getRemoteId(connection);
+                    if (!localTransport && remote != 0) {
+                        for (const auto& [existing, id] : remoteIds) {
+                            if (id != remote) continue;
+                            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                        "Rejecting a second connection from %llu; it is already "
+                                        "connected on %u.",
+                                        static_cast<unsigned long long>(remote), existing);
+                            sockets->CloseConnection(connection, 0, "already connected", false);
+                            return;
+                        }
+                    }
                     if (sockets->AcceptConnection(connection) != k_EResultOK) {
                         sockets->CloseConnection(connection, 0, nullptr, false);
                         return;
                     }
+                    remoteIds[connection] = remote;
                     sockets->SetConnectionPollGroup(connection, pollGroup);
                     connections.push_back(connection);
                 }
@@ -379,6 +399,7 @@ namespace ytail::net {
     void NetPeer::removeConnection(const uint32_t connection) {
         connections.erase(std::remove(connections.begin(), connections.end(), connection),
                           connections.end());
+        remoteIds.erase(connection);
     }
 
     void NetPeer::shutdown() {
@@ -388,6 +409,7 @@ namespace ytail::net {
             sockets->CloseConnection(connection, 0, "shutting down", true);
         }
         connections.clear();
+        remoteIds.clear();
 
         if (pollGroup != k_HSteamNetPollGroup_Invalid) {
             sockets->DestroyPollGroup(pollGroup);

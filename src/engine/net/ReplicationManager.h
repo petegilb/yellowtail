@@ -80,6 +80,15 @@ namespace ytail::net {
         // buttons survive that; a press does not, so this is what a missing jump looks like.
         int repeated = 0;
 
+        // What read() actually handed back for a tick, which is not always what we hold: a tick we
+        // had no frame for was driven by carrying an older one forward. Keeping it is what lets a
+        // late arrival be recognised as a guess we got wrong rather than quietly filed.
+        std::array<NetInputFrame, Length> used{};
+        std::array<Uint64, Length> usedTicks{};
+        // Earliest tick whose real frame turned out to differ from the guess we simulated it with.
+        // 0 when there is nothing to redo.
+        Uint64 mispredictedTick = 0;
+
         void write(Uint64 tick, const NetInputFrame& frame);
         // Exactly what was stored for this tick, or neutral. Does not count as starvation.
         [[nodiscard]] NetInputFrame at(Uint64 tick) const;
@@ -403,8 +412,13 @@ namespace ytail::net {
         [[nodiscard]] bool predictionAgrees(const WorldSnapshot& snapshot) const;
         void applyStates(const WorldSnapshot& snapshot);
         // Restores the world to the tick the host is describing and replays every step since from
-        // buffered input, so the whole simulation ends up back at the present.
-        void rollbackAndReplay(const WorldSnapshot& snapshot);
+        // buffered input, so the whole simulation ends up back at the present. force skips the
+        // agreement check, for a replay driven by input rather than by state.
+        void rollbackAndReplay(const WorldSnapshot& snapshot, bool force = false);
+        // A peer's real input arrived for a tick we already simulated with a guess, and the two
+        // differ. Replays from the last authoritative state we have so the press lands where it
+        // belongs instead of being lost for having arrived a few ticks late.
+        void replayLateInput();
         // The local entity for a netId, or NULL_ENTITY if this peer has no copy of it.
         EntityId resolveEntity(uint32_t netId, uint32_t hostEntityId);
         void resetReceivedState();
@@ -469,6 +483,12 @@ namespace ytail::net {
         Uint64 oldestContactTick = 0;
         Uint64 newestContactTick = 0;
         bool contactsValid = false;
+
+        // The newest snapshot we applied, kept whole so a late input can be replayed from an
+        // authoritative state rather than from wherever the simulation happens to be.
+        WorldSnapshot lastApplied;
+        bool hasLastApplied = false;
+        int lateInputReplays = 0;
 
         ThrottledWarning budgetWarning;
         ThrottledWarning worldBoundWarning;

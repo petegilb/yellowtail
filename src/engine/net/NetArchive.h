@@ -111,12 +111,6 @@ namespace ytail::net {
     struct NetInputFrame {
         uint32_t buttons = 0;
 
-        // Bits meaning "pressed on this tick" rather than "held", set once by the game. A frame
-        // carried forward to stand in for a tick we have no input for keeps the held bits and drops
-        // these, so an edge fires on the one tick it belongs to however long it is repeated. Without
-        // it a peer extrapolating a player jumps again every tick until their next frame lands.
-        inline static uint32_t edgeButtons = 0;
-
         bool operator==(const NetInputFrame& other) const = default;
     };
 
