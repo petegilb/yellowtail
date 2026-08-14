@@ -1172,8 +1172,12 @@ namespace ytail::net {
         // Before the bodies move onto the snapshot, so the first replayed step solves from the
         // contacts that belonged to this tick rather than the ones the present left behind.
         if (willReplay && contactsValid && target >= oldestContactTick && target <= newestContactTick) {
-            physics::PhysicsManager::get().restoreContacts(
-                static_cast<int>(target % physics::PhysicsManager::MaxSavedContacts));
+            // Refused means a body was created or destroyed since that slot was written, which
+            // empties every slot rather than just this one, so the window restarts from next tick.
+            if (!physics::PhysicsManager::get().restoreContacts(
+                    static_cast<int>(target % physics::PhysicsManager::MaxSavedContacts))) {
+                contactsValid = false;
+            }
         }
 
         applyStates(snapshot);

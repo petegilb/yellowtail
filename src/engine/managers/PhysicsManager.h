@@ -125,11 +125,15 @@ namespace ytail::physics {
         // on something else is every step.
         //
         // Body poses are deliberately not saved: the snapshot being replayed from supplies those.
-        // Restoring is only valid while the body set is unchanged, since a rebuilt body takes a new
-        // id and invalidates every slot.
+        //
+        // The cache is keyed by BodyID, so it only survives while the body set is unchanged.
+        // createBody and removeBody throw away every slot, and restoring an empty one is refused
+        // rather than applied to ids that have since been destroyed or recycled. restoreContacts
+        // returns whether the slot was actually applied, so a caller tracking which ticks it can
+        // replay from can drop a window the body set invalidated.
         static constexpr int MaxSavedContacts = 64;
         void saveContacts(int slot);
-        void restoreContacts(int slot);
+        bool restoreContacts(int slot);
 
         // generate debug wireframe so we can draw it in the renderer
         void debugDraw();

@@ -272,6 +272,22 @@ trip behind, which is what makes colliding with one feel like colliding with a p
 Contacts are restored **before** the bodies move onto the snapshot, so the first replayed step solves
 from the contacts that belonged to that tick rather than the ones the present left behind.
 
+What that restore carries is solver history, not geometry. Jolt reruns broad phase and narrow phase
+from the current body positions every step regardless, so the saved cache is not there to skip
+collision detection. It holds the accumulated impulses each contact ended the previous step with
+(`mNonPenetrationLambda`, `mFrictionLambda`), which `WarmStartVelocityConstraints` seeds the solver
+with. A sequential-impulse solver run for a fixed iteration count does not fully converge, so the
+starting guess changes the answer, and for a resting or stacked body that is the difference between
+a stable contact and a visible resettle. The cache also lets `GetContactsFromCache` reuse a whole
+manifold when a pair has barely moved, which decides whether narrow phase runs for that pair at all.
+Neither is derivable from positions, which is why a replay cannot simply regenerate it.
+
+The cache is keyed by `BodyID`, so it is only valid while the body set is unchanged. `createBody` and
+`removeBody` throw away every saved slot, and `restoreContacts` refuses an empty one rather than
+handing Jolt ids that no longer exist. `ReplicationManager` drops its whole contact window on a
+refusal and rebuilds it from the next tick. Changing motion type does not invalidate anything, since
+the `BodyID` survives.
+
 The replay runs up to but not including `localTick`, since `applyReceived` runs before this tick is
 stepped and the caller's own `simulateStep` finishes the catch-up.
 

@@ -190,6 +190,10 @@ namespace ytail::physics {
 
         // Reused rather than reallocated: one of these is written every fixed tick.
         std::array<StateRecorderImpl, PhysicsManager::MaxSavedContacts> savedContacts;
+
+        void invalidateSavedContacts() {
+            for (StateRecorderImpl& recorder : savedContacts) recorder.Clear();
+        }
     };
 
     PhysicsManager& PhysicsManager::get() {
@@ -299,6 +303,7 @@ namespace ytail::physics {
                 "[Jolt] createBody failed (body limit of %u reached?)", cMaxBodies);
             return InvalidBody;
         }
+        impl->invalidateSavedContacts();
         return id.GetIndexAndSequenceNumber();
     }
 
@@ -308,6 +313,7 @@ namespace ytail::physics {
         const BodyID id(handle);
         bodyInterface.RemoveBody(id);
         bodyInterface.DestroyBody(id);
+        impl->invalidateSavedContacts();
     }
 
     void PhysicsManager::getBodyTransform(BodyHandle handle, glm::vec3& outPosition, glm::quat& outRotation) const {
@@ -475,13 +481,17 @@ namespace ytail::physics {
         impl->physicsSystem.SaveState(recorder, EStateRecorderState::Contacts);
     }
 
-    void PhysicsManager::restoreContacts(const int slot) {
-        if (slot < 0 || slot >= MaxSavedContacts) return;
+    bool PhysicsManager::restoreContacts(const int slot) {
+        if (slot < 0 || slot >= MaxSavedContacts) return false;
         StateRecorderImpl& recorder = impl->savedContacts[slot];
-        if (recorder.GetDataSize() == 0) return;
+        // Empty means never written, or thrown away because the body set changed. Jolt rebuilds the
+        // cache straight from the BodyIDs in the stream without checking they still exist, so a
+        // stale slot has to be refused here rather than handed over.
+        if (recorder.GetDataSize() == 0) return false;
         // Rewound every time, so one slot can be restored more than once.
         recorder.Rewind();
         impl->physicsSystem.RestoreState(recorder);
+        return true;
     }
 
     void PhysicsManager::debugDraw() {
