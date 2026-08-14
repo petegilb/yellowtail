@@ -22,36 +22,28 @@
 #include "engine/managers/PhysicsManager.h"
 #include "engine/render/DebugDraw.h"
 
+// See docs/netcode.md for the model, the wire format, and how the delays interact.
 namespace ytail::net {
-    // Steam fragments unreliable messages, so this is not an MTU limit. It only has to be
-    // larger than any snapshot we build.
+    // Steam fragments unreliable messages, so this is not an MTU limit. It only has to be larger
+    // than any snapshot we build.
     constexpr int SendBufferWords = 16 * 1024;
     constexpr int SoftPacketBytes = 1200;
 
-    // Defaults meant to hold together up to about 300ms rather than be tuned for it. What that
-    // latency costs is staleness: a packet is roughly twenty ticks behind us by the time it can be
-    // applied, so every threshold has to treat that as normal rather than as a fault.
+    // Meant to hold together up to about 300ms rather than be tuned for it. Reasoning for each of
+    // these is in docs/netcode.md, "Tuning defaults".
     Uint64 ReplicationManager::snapshotSendInterval = 6;
     Uint64 ReplicationManager::minJitterTicks = 2;
-    // Real jitter at this latency moves further than a single tick.
     Uint64 ReplicationManager::jitterMargin = 2;
-    // Three seconds per shrink step: a connection that spikes will spike again.
     int ReplicationManager::jitterWindowPackets = 30;
-    // Two ticks absorbs the clock lead on a local connection, leaving every peer on the same tick at
-    // the same moment with two ticks of margin for the hop itself.
     Uint64 ReplicationManager::inputDelayTicks = 4;
     bool ReplicationManager::adaptiveInputDelay = true;
     bool ReplicationManager::lateInputRollback = true;
     bool ReplicationManager::peerMesh = true;
     Uint64 ReplicationManager::maxInputDelayTicks = 8;
-    // 5cm, well inside a ball and far looser than the 2mm the wire can express. Tight enough that a
-    // real divergence is caught, loose enough that solver noise is not mistaken for one.
     float ReplicationManager::predictionTolerance = 0.05f;
-    // Eight degrees. A ball at the angular speed cap covers that in a couple of ticks, so it is
-    // tight enough to catch real drift without firing on quantization.
     float ReplicationManager::predictionAngleTolerance = 0.14f;
 
-    // One definition for both directions, so a field can never be added to the write side and
+    // One definition for both directions, so a field cannot be added to the write side and
     // forgotten on the read side.
     template<typename Stream>
     void serializeEntity(Stream& stream, EntitySnapshot& entity) {
@@ -66,8 +58,6 @@ namespace ytail::net {
              + stateBits(entity.state);
     }
 
-    // Long enough that a persistent problem stays visible without drowning the log, short enough
-    // that turning a knob and watching for the warning to stop is a workable loop.
     constexpr Uint64 WarnIntervalMs = 5000;
 
     bool ThrottledWarning::due() {
@@ -95,8 +85,8 @@ namespace ytail::net {
         // that happens to share the slot.
         if (ticks[slot] > tick) return;
 
-        // We already simulated this tick, and with something other than what actually happened. The
-        // press is not lost, it just arrived late, and the tick it belongs to is right here.
+        // We already simulated this tick with something other than what actually happened, so the
+        // press is not lost, only late.
         if (usedTicks[slot] == tick && !(used[slot] == frame) && ticks[slot] != tick) {
             mispredictedTick = mispredictedTick == 0 ? tick : std::min(mispredictedTick, tick);
         }
@@ -112,6 +102,7 @@ namespace ytail::net {
 
     // Records what it hands back, so a frame arriving later for this tick can be recognised as
     // contradicting a guess rather than simply filed away.
+    // See docs/netcode.md, "Late input", for why a gap carries forward instead of going neutral.
     NetInputFrame InputHistory::read(const Uint64 tick) {
         const size_t slot = tick % Length;
         usedTicks[slot] = tick;
@@ -120,9 +111,8 @@ namespace ytail::net {
             return frames[slot];
         }
 
-        // Nothing for this tick, so hold the newest one we do have. This is the normal case for
-        // another player: we run ahead of the host, so their input is always behind our simulation
-        // and every tick of theirs is extrapolated. Only giving up entirely counts as starvation.
+        // Nothing for this tick, so hold the newest one we do have. Normal for another player, so
+        // only giving up entirely counts as starvation.
         if (newestTick == 0 || tick < newestTick
             || tick - newestTick > ReplicationManager::MaxInputStaleTicks) {
             ++starved;
@@ -132,9 +122,8 @@ namespace ytail::net {
         const size_t newestSlot = newestTick % Length;
         if (ticks[newestSlot] != newestTick) return {};
 
-        // Every button is held rather than pulsed, precisely so carrying one forward is harmless:
-        // a bit that means "I am holding this" is still true a tick later, and one that meant
-        // "pressed just now" would have been lost here every time a peer's input ran late.
+        // Safe only because every button is held rather than pulsed. An edge-triggered bit would be
+        // lost here every time a peer's input ran late.
         ++repeated;
         used[slot] = frames[newestSlot];
         return frames[newestSlot];
@@ -169,9 +158,8 @@ namespace ytail::net {
             && angleBetween(predictedRotation, rotation) <= ReplicationManager::predictionAngleTolerance;
     }
 
-    // Up at once, down slowly. A packet later than the hold arrives after it was due and pops
-    // whatever it moves, so there is no reason to ease into covering it; giving the slack back
-    // breaks nothing, so there is no reason to hurry.
+    // Up at once, down slowly. A packet later than the hold pops whatever it moves, while giving
+    // slack back breaks nothing.
     void JitterEstimator::observe(const Uint64 transit) {
         worstTransit = std::max(worstTransit, transit);
         const Uint64 needed = std::max(transit + ReplicationManager::jitterMargin,
@@ -197,8 +185,8 @@ namespace ytail::net {
         SDL_Log("Writing net trace to %s", path.c_str());
     }
 
-    // This peer's own view, not the host's. Comparing a peer's line for a body against the line the
-    // body's owner wrote for the same tick is the prediction error, straight out.
+    // This peer's own view, not the host's. Joining two peers' traces on (tick, netId) gives the
+    // prediction error directly.
     void ReplicationManager::writeTrace(const Uint64 tick) {
         if (!traceFile.is_open()) return;
         engine->getWorld().each<NetworkComponent, TransformComponent>(
@@ -230,17 +218,15 @@ namespace ytail::net {
         }
     }
 
-    // Filed against a tick in the future, not the one being simulated, so it has that many ticks of
-    // head start to reach everyone before they reach the tick it belongs to. Close that gap and
-    // their simulation of this ball is exact rather than a guess repeated forward. The cost is that
-    // our own ball acts on it that late, which torque already hides on anything with mass.
+    // Filed against a tick in the future, so it has that many ticks of head start to reach everyone
+    // before they reach the tick it belongs to. See docs/netcode.md, "The three delays".
     void ReplicationManager::setLocalInput(const Uint64 tick, const NetInputFrame& frame) {
         if (localPeerId == NoOwner) return;
         InputHistory& history = inputByPeer[localPeerId];
         const Uint64 target = tick + inputDelayTicks;
 
         // Raising the delay steps over a tick, which every peer would otherwise read as a moment of
-        // no input at all. Filling it with this frame is what carrying one forward would have given.
+        // no input at all.
         Uint64 first = target;
         if (history.newestTick > 0 && history.newestTick < target
             && target - history.newestTick <= InputHistory::Length) {
@@ -249,11 +235,9 @@ namespace ytail::net {
         for (Uint64 fill = first; fill <= target; ++fill) history.write(fill, frame);
     }
 
-    // The delay has to cover the trip this peer's input takes to whoever simulates its body, and the
-    // longest of those is the round trip to the host: our input has to reach it, and its own has to
-    // come back before we can predict its ball. Fitted to the measured crossovers, six ticks at a
-    // 50ms round trip and twelve at 150ms, which is a tick of delay per tick of round trip plus the
-    // clock's dead band.
+    // The delay has to cover the trip to whoever simulates this peer's body, and the longest of
+    // those is the round trip to the host. Fitted to measured crossovers of six ticks at 50ms and
+    // twelve at 150ms.
     void ReplicationManager::steerInputDelay() {
         if (!adaptiveInputDelay || peer->getConnections().empty()) return;
         if (inputDelayCooldown > 0) {
@@ -273,8 +257,8 @@ namespace ytail::net {
         const Uint64 wanted = std::clamp<Uint64>(worstOneWay * 2 + InputLeadTarget,
                                                  MinInputDelayTicks, maxInputDelayTicks);
         if (wanted == inputDelayTicks) return;
-        // A tick at a time. The clock steers against this, so moving it in one jump would drag the
-        // clock after it and leave a seam in the history everyone predicting us reads from.
+        // A tick at a time, since the clock steers against this and a jump would drag the clock
+        // after it, leaving a seam in the history everyone predicting us reads from.
         inputDelayTicks += wanted > inputDelayTicks ? 1 : -1;
         inputDelayCooldown = InputDelayAdjustCooldown;
     }
@@ -292,10 +276,8 @@ namespace ytail::net {
     }
 
     // The newest frames, oldest first, each either a repeat of the one before it or eight fresh
-    // bits. Redundancy is what makes losing an input packet a non-event.
-    //
-    // Every peer stamps input with the shared tick, so a frame lands in the same slot on every
-    // machine and a redundant copy repairs the hole it was sent to repair.
+    // bits. The shared tick stamp is what lets a redundant copy repair the exact hole it was sent
+    // to repair.
     template<typename Stream>
     void ReplicationManager::serializeInputWindow(Stream& stream, const uint32_t peerId, const Uint64 newestTick) {
         InputHistory& history = inputByPeer[peerId];
@@ -317,9 +299,8 @@ namespace ytail::net {
         }
     }
 
-    // One way trip to the host, in ticks. Measured against the host's connection specifically: a
-    // client also holds links to its peers now, and the ping to one of those says nothing about the
-    // clock. 0 when the backend has no estimate yet.
+    // One way trip to the host, in ticks, or 0 when the backend has no estimate yet. The host's
+    // connection specifically, since the ping to a peer link says nothing about the clock.
     Uint64 ReplicationManager::oneWayTicks() const {
         const uint32_t connection = peer->getHostConnection();
         if (connection == 0) return 0;
@@ -329,8 +310,8 @@ namespace ytail::net {
             std::ceil((static_cast<float>(pingMs) * 0.5f) / (Engine::FIXED_DT * 1000.0f)));
     }
 
-    // How far ahead of the host the clock should start. Falls back to a fixed guess while the
-    // backend has no estimate, which is the case for the first moments of a connection.
+    // How far ahead of the host the clock should start. Falls back to a fixed guess for the first
+    // moments of a connection, while the backend has no estimate.
     Uint64 ReplicationManager::leadFromPing() {
         if (peer->getConnections().empty()) return InitialInputLead;
         const Uint64 oneWay = oneWayTicks();
@@ -340,7 +321,7 @@ namespace ytail::net {
         // up whatever is left of the trip.
         const Uint64 fromClock = oneWay > inputDelayTicks ? oneWay - inputDelayTicks : 0;
         // Past this the clock cannot get far enough ahead for our input to reach the host in time,
-        // and there is nothing the rest of the system can do about it.
+        // and nothing else in the system can compensate.
         if (fromClock > MaxInputLeadTicks && connectionCapWarning.due()) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "This connection needs a %llu tick clock lead, past the %llu cap "
@@ -353,23 +334,16 @@ namespace ytail::net {
         return std::clamp<Uint64>(fromClock, 0, MaxInputLeadTicks);
     }
 
-    // Ticks of our input the host should be holding beyond the tick it is simulating.
-    //
-    // Two things have to hold: the host must not run out of our input, and our clock must not fall
-    // behind the host's. What the host reports is clockLead + delay - transit, so asking it for the
-    // whole delay pins the clock lead to the transit however much delay we add. That is the wrong
-    // place for the margin -- the host is served equally well by either, but every tick of clock
-    // lead is a tick further ahead of the host than we can ever predict it. Asking only for what the
-    // delay does not already cover lets the clock settle at zero once the delay covers the trip,
-    // while the lower bound still keeps it from going negative.
+    // Ticks of our input the host should be holding beyond the tick it is simulating. Asking only
+    // for what the delay does not already cover lets the clock settle at zero once the delay covers
+    // the trip. See docs/netcode.md, "The three delays", for why the margin belongs here.
     int32_t ReplicationManager::inputLeadTarget() const {
         const auto uncovered = static_cast<int32_t>(inputDelayTicks) - static_cast<int32_t>(oneWayTicks());
         return std::max(InputLeadTarget, uncovered);
     }
 
-    // One tick at a time, with a dead band and a cooldown. The lead being reported is a round trip
-    // old, so an adjustment does not show up in it for a while: reacting to every packet would keep
-    // correcting for a change already made and oscillate.
+    // One tick at a time, with a dead band and a cooldown. The reported lead is a round trip old, so
+    // reacting to every packet would keep correcting for a change already made and oscillate.
     void ReplicationManager::steerClock(const int32_t reportedLead) {
         measuredInputLead = reportedLead;
         if (engine == nullptr) return;
@@ -384,9 +358,8 @@ namespace ytail::net {
                ? target + InputLeadSlack - reportedLead : 0);
         if (error == 0) return;
 
-        // A large error is a step change, not drift: a hitch, a route change, or a bad initial
-        // estimate. Crawling one tick at a time would take seconds, so close most of it at once and
-        // let the dead band settle the rest.
+        // A large error is a step change rather than drift (a hitch, a route change, a bad initial
+        // estimate), and crawling out of one would take seconds.
         const int adjustment = std::abs(error) > InputLeadJumpThreshold ? error : (error > 0 ? 1 : -1);
         engine->adjustClock(adjustment);
         ++clockAdjustments;
@@ -399,8 +372,6 @@ namespace ytail::net {
         ImGui::SetItemTooltip("%s", tooltip);
     }
 
-    // Everything worth turning a dial on while watching two balls collide under lag. The rates take
-    // effect on the next packet; the smoothing is read per rendered frame, so it is immediate.
     void ReplicationManager::drawTuning() {
         ImGui::SeparatorText("Tuning");
         tickSlider("State interval", snapshotSendInterval, 12,
@@ -471,9 +442,9 @@ namespace ytail::net {
         steerInputDelay();
         writeTrace(tick);
         if (peer->isHosting()) {
-            // Every tick, separately from state. Clients simulate each other's balls from these, so
-            // forwarding them at the state rate left them acting on input a whole send interval
-            // stale, which showed up as the other players constantly being corrected.
+            // Every tick, separately from state. Forwarding at the state rate left clients acting
+            // on input a whole send interval stale, which showed up as the other players
+            // constantly being corrected.
             sendPeerInput();
             captureHost(tick);
         } else {
@@ -505,14 +476,13 @@ namespace ytail::net {
         tickFlags = 0;
     }
 
-    // Velocity rides along because remote peers simulate this body rather than interpolate it.
     // A networked entity without a rigidbody has no velocity to report and is always at rest.
     QuantizedState ReplicationManager::captureState(const EntityId id, const TransformComponent& transform) {
         const RigidbodyComponent* rigidbody = engine->getWorld().get<RigidbodyComponent>(id);
         const glm::vec3 position = transform.getPosition();
 
-        // Everything past the bound quantizes to the bound, so a body that leaves the world stops
-        // moving on every other machine while carrying on here. This is what a kill volume is for.
+        // Everything past the bound quantizes to the bound, so a body that leaves the world freezes
+        // on every other machine while carrying on here.
         const float furthest = std::max({ std::abs(position.x), std::abs(position.y), std::abs(position.z) });
         if (furthest > WorldExtentMeters && worldBoundWarning.due()) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -530,8 +500,8 @@ namespace ytail::net {
 
         const glm::vec3 linear = rigidbody->getLinearVelocity();
         const glm::vec3 angular = rigidbody->getAngularVelocity();
-        // Same failure, one derivative up: a clamped velocity means every remote peer simulates this
-        // body slower than it is really going, and keeps being corrected for it.
+        // The same failure one derivative up. A clamped velocity means every remote peer simulates
+        // this body slower than it is really going.
         const float fastest = std::max({ std::abs(linear.x), std::abs(linear.y), std::abs(linear.z) });
         const float spin = std::max({ std::abs(angular.x), std::abs(angular.y), std::abs(angular.z) });
         if ((fastest > MaxLinearSpeed || spin > MaxAngularSpeed) && velocityRangeWarning.due()) {
@@ -551,8 +521,8 @@ namespace ytail::net {
 
         World& world = engine->getWorld();
 
-        // One quantize pass shared by every connection; only the choice of what to send is per
-        // client. netId indexes straight into it, so selection needs no lookups.
+        // One quantize pass shared by every connection, indexed by netId so selection needs no
+        // lookups. Only the choice of what to send is per client.
         latestStates.clear();
         world.each<NetworkComponent, TransformComponent>(
             [&](const EntityId id, NetworkComponent& network, const TransformComponent& transform) {
@@ -579,8 +549,7 @@ namespace ytail::net {
         }
     }
 
-    // Players first, then whatever is near the player, then everything else by how long it has been
-    // waiting. Deliberately small: it decides what a starved connection gives up first.
+    // Deliberately small. All it decides is what a starved connection gives up first.
     float ReplicationManager::basePriority(const EntitySnapshot& entity, const ClientSyncState& client,
                                            const glm::vec3& clientFocus) const {
         float priority = 1.0f;
@@ -612,8 +581,8 @@ namespace ytail::net {
             break;
         }
 
-        // Anything whose state changed owes a fresh round of sends; anything settled counts down
-        // and then goes silent, which is what makes a world full of resting objects free.
+        // Anything whose state changed owes a fresh round of sends. Anything settled counts down and
+        // goes silent, which is what makes a world full of resting objects free.
         std::vector<const EntitySnapshot*> candidates;
         for (const EntitySnapshot& entity : latestStates) {
             const size_t index = entity.netId;
@@ -633,17 +602,15 @@ namespace ytail::net {
         writer.writeBits(static_cast<uint32_t>(NetMessageType::Snapshot), 8);
         writer.writeVarUInt(static_cast<uint32_t>(tick));
 
-        // Count has to be written before the entities, so the budget decides the set up front. The
-        // writer cannot rewind, which is also why the cost is checked before each entity, not after.
-        // complete and the count are written once the set is known, so they are reserved here at the
-        // largest they can be: selected never exceeds candidates.
+        // The writer cannot rewind, so the budget has to decide the whole set before anything is
+        // written. complete and the count are reserved here at the largest they can be, since
+        // selected never exceeds candidates.
         constexpr int MaxStatePayloadBits = MaxStatePayloadBytes * 8;
         std::vector<const EntitySnapshot*> selected;
         int usedBits = writer.getBitsWritten() + 1 + varUIntBits(static_cast<uint32_t>(candidates.size()));
         for (const EntitySnapshot* entity : candidates) {
-            // Charged what it actually costs. A single worst case price for every entity spent the
-            // packet on bits nothing was going to write: a resting body is half the size of a moving
-            // one, and both are far short of the largest ids the varints could hold.
+            // Charged what it actually costs. A single worst case price spent the packet on bits
+            // nothing was going to write, since a resting body is half the size of a moving one.
             const int cost = entityBits(*entity);
             if (usedBits + cost > MaxStatePayloadBits) break;
             usedBits += cost;
@@ -653,8 +620,7 @@ namespace ytail::net {
         client.lastSkippedEntities = static_cast<int>(candidates.size() - selected.size());
 
         // Tells the client whether this packet is a restore point or only a correction. Resting
-        // bodies missing from it do not count against that: the host left them out because they
-        // have not moved, so where the client already has them is where they belong.
+        // bodies left out do not count against it, since they have not moved.
         bool complete = selected.size() == candidates.size();
         if (!complete && budgetWarning.due()) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -673,8 +639,8 @@ namespace ytail::net {
             serializeEntity(writer, copy);
         }
 
-        // entityBits counts by hand what serializeEntity writes, so a field added to one and missed
-        // by the other surfaces here rather than as an oversized packet much later.
+        // entityBits mirrors serializeEntity by hand, so a field added to one and missed by the
+        // other surfaces here rather than as an oversized packet much later.
         SDL_assert(writer.getBitsWritten() <= usedBits);
 
         if (writer.hasOverflowed()) {
@@ -684,8 +650,8 @@ namespace ytail::net {
         }
         writer.flush();
 
-        // Only counted as sent once it is actually on the wire, so a dropped packet does not
-        // silence an entity that never made it out.
+        // Only counted as sent once it is on the wire, so a failed send does not silence an entity
+        // that never made it out.
         client.worstTicksSinceSent = 0;
         for (const EntitySnapshot* entity : selected) {
             const size_t index = entity->netId;
@@ -702,26 +668,24 @@ namespace ytail::net {
 
         const int size = writer.getBytesWritten();
         client.lastSentBytes = size;
-        // Unreliable throughout: a lost packet is replaced by the next one, and priority makes sure
-        // whatever it was carrying comes back around.
+        // Unreliable. A lost packet is replaced by the next one, and priority guarantees whatever it
+        // was carrying comes back around.
         peer->sendUnreliable(connection, sendWords.data(), static_cast<uint32_t>(size));
         sentBytes.add(size);
     }
 
-    // Everyone else's input, so a client can simulate the other players rather than watch them
-    // coast between updates. Each recipient's own input is skipped: it already has it, and skipping
-    // keeps the packet from growing with the square of the player count.
+    // Everyone else's input, so a client can simulate the other players rather than watch them coast
+    // between updates. Each recipient's own input is skipped, which also keeps the packet from
+    // growing with the square of the player count.
     void ReplicationManager::sendPeerInput() {
         for (const uint32_t connection : peer->getConnections()) {
             const auto client = clients.find(connection);
             if (client == clients.end()) continue;
 
-            // How far ahead of us this client is running, measured where it matters: the newest
-            // input it has sent, against the tick we are about to simulate. Positive means its
-            // input is waiting for us. This is the whole clock feedback loop.
-            // A client that has not produced input yet has nothing to measure: taking tick 0 as its
-            // position on the timeline reports a lead of minus our whole uptime, and that lands on
-            // its clock as one enormous jump forward the moment it joins.
+            // The whole clock feedback loop. Positive means this client's input is waiting for us.
+            // A client that has not produced input yet is reported as 0, since taking tick 0 as its
+            // position would report a lead of minus our whole uptime and land on its clock as one
+            // enormous jump forward the moment it joins.
             const auto history = inputByPeer.find(client->second.peerId);
             client->second.inputLead = history == inputByPeer.end() || history->second.newestTick == 0 ? 0
                 : static_cast<int32_t>(static_cast<int64_t>(history->second.newestTick) - static_cast<int64_t>(localTick));
@@ -754,8 +718,7 @@ namespace ytail::net {
     }
 
     void ReplicationManager::onPeerInputMessage(const int size) {
-        // Clients only. This steers our clock, and on the host that is the clock everyone else is
-        // steering against.
+        // Clients only. The host's clock is the one everyone else steers against.
         if (peer->isHosting()) return;
 
         BitReader reader(receiveWords.data(), size);
@@ -769,23 +732,23 @@ namespace ytail::net {
             const uint32_t peerId = reader.readVarUInt();
             const Uint64 newestTick = reader.readVarUInt();
             if (reader.hasOverflowed() || newestTick > localTick + MaxInputLeadTicks) return;
-            // Always consumed, even for a peer id we have no use for: skipping the bits instead of
-            // reading them would leave the rest of the packet misaligned.
+            // Always consumed, even for a peer id we have no use for. Skipping the bits rather than
+            // reading them would misalign the rest of the packet.
             serializeInputWindow(reader, peerId, newestTick);
         }
     }
 
     void ReplicationManager::onMessage(const uint32_t connection, const void* data, const uint32_t size) {
-        // Bounded before the arithmetic below: (size + 3) wraps on a huge size and under allocates.
+        // Bounded before the arithmetic below, since (size + 3) wraps on a huge size and under
+        // allocates.
         constexpr uint32_t MaxMessageBytes = 1024 * 1024;
         if (!isBound() || size < 1 || size > MaxMessageBytes) return;
         const auto* bytes = static_cast<const uint8_t*>(data);
         receivedBytes.add(static_cast<int>(size));
 
         // BitReader loads the trailing partial word in full, so the payload is copied into a word
-        // sized buffer rather than read in place off Steam's arbitrary length allocation.
-        // Only the padding in the final word needs clearing; the memcpy covers the rest, and the
-        // buffer keeps its capacity between messages.
+        // sized buffer rather than read in place off Steam's arbitrary length allocation. Only the
+        // padding in the final word needs clearing, since the memcpy covers the rest.
         const uint32_t wordCount = (size + 3) / 4;
         if (receiveWords.size() < wordCount) receiveWords.resize(wordCount);
         receiveWords[wordCount - 1] = 0;
@@ -826,9 +789,8 @@ namespace ytail::net {
         // Unreliable delivery can duplicate or reorder, and a second copy would just take a slot.
         if (findReceived(snapshot.tick) != nullptr) return;
 
-        // Every packet stands on its own: it carries whichever entities won the host's budget this
-        // interval, and anything it leaves out is simply not being updated yet. There is no baseline
-        // to rebuild against and nothing to merge.
+        // Every packet stands on its own. There is no baseline to rebuild against and nothing to
+        // merge, so anything left out is simply not being updated yet.
         reader.serializeBool(snapshot.complete);
         const uint32_t entityCount = reader.readVarUInt();
         for (uint32_t i = 0; i < entityCount; ++i) {
@@ -842,7 +804,7 @@ namespace ytail::net {
 
         lastReceivedChanged = static_cast<int>(snapshot.entities.size());
         // The host sends on a fixed interval, so a jump of more than one interval is exactly the
-        // snapshots that went missing. Duplicates and reorders are already gone by here.
+        // snapshots that went missing. Duplicates and reorders are already gone.
         if (lastArrivedTick != 0 && snapshotSendInterval > 0
             && snapshot.tick > lastArrivedTick + snapshotSendInterval) {
             lostSnapshots += static_cast<int>((snapshot.tick - lastArrivedTick) / snapshotSendInterval) - 1;
@@ -892,13 +854,9 @@ namespace ytail::net {
         if (reader.hasOverflowed() || peer->isHosting()) return;
         localPeerId = peerId;
 
-        // The host's numbering becomes ours, offset so we simulate a tick before it does. Our input
-        // for a tick then travels while the host is still working towards that tick, and arrives in
-        // time to be applied rather than guessed at.
-        //
-        // Seeded from the round trip so we start close, then held there by the lead the host reports
-        // back. RTT alone would assume the two directions are equally fast and would still need a
-        // guess at jitter; the feedback loop measures what actually happened. Neither is redundant.
+        // The host's numbering becomes ours, offset so we simulate a tick before it does. Seeded
+        // from the round trip and then held there by the lead the host reports back. Neither half is
+        // redundant, see docs/netcode.md, "The three delays".
         const Uint64 lead = leadFromPing();
         engine->setTickNumber(hostTick + lead);
         // We have an id now, so the host can put us in the roster and the others can dial us.
@@ -974,16 +932,15 @@ namespace ytail::net {
         const Uint64 ackedTick = reader.readVarUInt();
         const Uint64 newestInputTick = reader.readVarUInt();
         if (reader.hasOverflowed()) return;
-        // A tick out in the future would park this peer's history there: every later read would see
-        // a newer tick than the one asked for and hand back neutral input forever, and the lead it
-        // implies is what we send back for the client to steer its clock by.
+        // A tick out in the future would park this peer's history there, so every later read would
+        // hand back neutral input forever, and the lead it implies is what the client steers its
+        // clock by.
         if (newestInputTick > localTick + MaxInputLeadTicks) return;
 
         if (!peer->isHosting()) {
-            // Straight from another client, one hop instead of two through the host. Taking its word
-            // for who it is costs nothing here: this only feeds our prediction of its ball, and the
-            // host's state still decides where that ball actually went. A peer that lied would smear
-            // its own ball on our screen until the next snapshot, and nothing else.
+            // Straight from another client, one hop instead of two. Taking its word for who it is
+            // costs nothing, since this only feeds our prediction of its ball and the host's state
+            // still decides where that ball actually went.
             if (claimedPeerId != NoOwner && claimedPeerId != localPeerId) {
                 serializeInputWindow(reader, claimedPeerId, newestInputTick);
             }
@@ -993,12 +950,12 @@ namespace ytail::net {
         const auto entry = clients.find(connection);
         if (entry == clients.end()) return;
         ClientSyncState& client = entry->second;
-        // Kept only as a liveness readout now. Nothing waits on it: every packet is self-contained,
-        // so a client that never acks still receives state.
+        // A liveness readout only. Every packet is self-contained, so a client that never acks still
+        // receives state.
         client.ackedTick = std::max(client.ackedTick, ackedTick);
 
-        // Keyed by the peer id we assigned, never by anything the client claims to be, so a client
-        // cannot drive another player's body by lying about who it is.
+        // Keyed by the peer id we assigned, never by what the client claims, so a client cannot
+        // drive another player's body by lying about who it is.
         serializeInputWindow(reader, client.peerId, newestInputTick);
     }
 
@@ -1031,8 +988,8 @@ namespace ytail::net {
         sendPeerRoster();
     }
 
-    // Resent whole whenever the membership changes. It is reliable and tiny, and a client that
-    // dials an address it already holds simply ignores it.
+    // Resent whole whenever membership changes. Reliable and tiny, and a client that already holds
+    // an address ignores it.
     void ReplicationManager::sendPeerRoster() {
         if (!peer->isHosting()) return;
 
@@ -1063,8 +1020,7 @@ namespace ytail::net {
 
             const uint64_t address = low | (high << 32);
             if (address == 0 || address == peer->getPeerAddress()) continue;
-            // Only upwards, so exactly one side of each pair dials. Both would otherwise open a link
-            // the moment they saw each other listed, and the pair would end up doubled.
+            // Only upwards, so exactly one side of each pair dials and links are not doubled.
             if (peerId <= localPeerId) continue;
             if (std::find(dialledPeers.begin(), dialledPeers.end(), address) != dialledPeers.end()) continue;
             dialledPeers.push_back(address);
@@ -1075,14 +1031,13 @@ namespace ytail::net {
     void ReplicationManager::sendClientInput() {
         const InputHistory& history = inputByPeer[localPeerId];
         // Nothing produced yet, which is every tick between the welcome and the ball we own being
-        // named. Announcing tick 0 as our position on the timeline is worse than saying nothing.
+        // named. Announcing tick 0 as our position is worse than saying nothing.
         if (history.newestTick == 0) return;
 
         sendWords.resize(SendBufferWords);
         BitWriter writer(sendWords.data(), SendBufferWords);
         writer.writeBits(static_cast<uint32_t>(NetMessageType::ClientInput), 8);
-        // Only another client reads this. The host knows which connection it arrived on and keys
-        // off that, so nobody can drive someone else's ball by claiming to be them.
+        // Only another client reads this. The host keys off the connection it arrived on instead.
         writer.writeVarUInt(localPeerId);
         writer.writeVarUInt(static_cast<uint32_t>(newestReceivedTick));
         writer.writeVarUInt(static_cast<uint32_t>(history.newestTick));
@@ -1104,8 +1059,8 @@ namespace ytail::net {
         if (!isBound() || !peer->isActive()) return;
         localTick = tick;
 
-        // The host is peer 1 rather than a special case, so its input is stored and forwarded
-        // through the same path as everyone else's.
+        // The host is peer 1 rather than a special case, so its input takes the same path as
+        // everyone else's.
         if (peer->isHosting()) localPeerId = HostPeerId;
 
         std::erase_if(correctionMarkers, [this](const CorrectionMarker& marker) {
@@ -1113,16 +1068,15 @@ namespace ytail::net {
         });
 
         sampleCorrection();
-        // The host simulates from the input it has been sent and answers to nobody, so there is
-        // nothing to apply on it.
+        // The host answers to nobody, so there is nothing to apply on it.
         if (peer->isHosting()) return;
         if (newestReceivedTick == 0) return;
         applyBufferedState();
         replayLateInput();
     }
 
-    // Kept per tick alongside the predictions, and for the same reason: a replay has to start from
-    // the solver state that belonged to the tick it is rewinding to.
+    // Kept per tick alongside the predictions, since a replay has to start from the solver state
+    // that belonged to the tick it is rewinding to.
     void ReplicationManager::saveContacts(const Uint64 tick) {
         physics::PhysicsManager::get().saveContacts(
             static_cast<int>(tick % physics::PhysicsManager::MaxSavedContacts));
@@ -1144,9 +1098,7 @@ namespace ytail::net {
             });
     }
 
-    // Both sides describe the same tick, so a body we extrapolated correctly does agree. One we got
-    // wrong has to be put back at the tick it went wrong on and carried forward from there, which is
-    // what the replay is for.
+    // Both sides describe the same tick, so a body we extrapolated correctly does agree.
     bool ReplicationManager::predictionAgrees(const WorldSnapshot& snapshot) const {
         for (const EntitySnapshot& entity : snapshot.entities) {
             const auto predicted = predictedByNetId.find(entity.netId);
@@ -1162,10 +1114,9 @@ namespace ytail::net {
         return true;
     }
 
-    // The input we simulated a tick with turned out to be wrong, and we know exactly which tick. The
-    // only authoritative state we keep is the last snapshot we applied, so the replay starts there
-    // rather than at the offending tick: a few extra steps, against needing a saved body state for
-    // every tick to do better.
+    // The only authoritative state we keep is the last snapshot applied, so the replay starts there
+    // rather than at the offending tick. That costs a few extra steps and avoids needing a saved
+    // body state for every tick.
     void ReplicationManager::replayLateInput() {
         if (!lateInputRollback) return;
         Uint64 earliest = 0;
@@ -1176,8 +1127,7 @@ namespace ytail::net {
             history.mispredictedTick = 0;
         }
         if (earliest == 0 || !hasLastApplied) return;
-        // Already covered: the snapshot we would replay from is newer than the tick that went wrong,
-        // so the host has since told us what actually happened there.
+        // Already covered, since the host has since told us what actually happened at that tick.
         if (earliest <= lastApplied.tick) return;
         if (localTick <= lastApplied.tick || localTick - lastApplied.tick > MaxRollbackTicks) return;
 
@@ -1192,11 +1142,10 @@ namespace ytail::net {
         }
     }
 
-    // The host's answer describes a tick we have already simulated past, because we deliberately run
-    // ahead of it. Applying it on its own would leave the whole world standing that far in the past,
-    // so put every body back where the host had it and play the buffered input forward again. This
-    // is the only thing that keeps a remote player at the present rather than a round trip behind,
-    // which is what makes colliding with them feel like colliding with a player.
+    // The host's answer describes a tick we have already simulated past, so applying it on its own
+    // would leave the whole world standing that far in the past. Replaying is the only thing that
+    // keeps a remote player at the present rather than a round trip behind.
+    // See docs/netcode.md, "Rollback and replay".
     void ReplicationManager::rollbackAndReplay(const WorldSnapshot& snapshot, const bool force) {
         World& world = engine->getWorld();
         const Uint64 target = snapshot.tick;
@@ -1213,8 +1162,8 @@ namespace ytail::net {
                              && localTick > target && localTick - target <= MaxRollbackTicks;
 
         // Where everything is drawn right now, so the rewind and the catch-up are hidden together as
-        // one movement rather than as a jump backwards followed by a scramble forwards. Taken before
-        // the snap-only path too: that one moves bodies furthest, so it needs the smoothing most.
+        // one movement rather than a jump backwards followed by a scramble forwards. Taken on the
+        // snap-only path too, which moves bodies furthest and so needs the smoothing most.
         const float alpha = engine->getRenderAlpha();
         world.each<RigidbodyComponent>([alpha](const EntityId, RigidbodyComponent& rigidbody) {
             rigidbody.captureVisualReference(alpha);
@@ -1232,8 +1181,8 @@ namespace ytail::net {
         if (!willReplay) {
             if (!snapshot.complete) ++snappedIncomplete;
             else if (localTick > target) ++snappedTooDeep;
-            // Applied without a replay, which leaves the whole world however far back this packet
-            // reaches. Corrections land as visible snaps from here on.
+            // The world is left however far back this packet reaches, and corrections land as
+            // visible snaps from here on.
             if (replaySkippedWarning.due()) {
                 SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                             "Correction applied without replaying: %s (%d suppressed). The world is "
@@ -1250,10 +1199,10 @@ namespace ytail::net {
             // the caller's own simulateStep is what finishes the catch-up.
             for (Uint64 tick = target + 1; tick < localTick; ++tick) {
                 engine->simulateStep(tick, Engine::FIXED_DT);
-                // The replay rewrites these ticks, so what we recorded and saved for them the first
-                // time through is now wrong. Left stale, the next packet compares against
-                // predictions this correction already invalidated and can never agree, and one
-                // divergence becomes a resimulation on every packet from then on.
+                // The replay rewrites these ticks, so what was recorded the first time through is
+                // now wrong. Left stale, one divergence becomes a resimulation on every packet from
+                // then on, since the next packet can never agree with a prediction this correction
+                // already invalidated.
                 recordPredictions(tick);
                 saveContacts(tick);
             }
@@ -1280,9 +1229,8 @@ namespace ytail::net {
         dequantizeState(entity.state, position, rotation, linear, angular);
 
         // Judged against what we predicted for this same tick, never against where the body stands
-        // now. We deliberately run the whole world ahead of the host, so the distance to the current
-        // pose is mostly that lead, and measuring it would report a large error on a body we
-        // predicted perfectly.
+        // now. The distance to the current pose is mostly the clock lead, so measuring that would
+        // report a large error on a body predicted perfectly.
         ReceivedState& received = lastReceivedByNetId[entity.netId];
         received.state = entity.state;
         glm::quat predictedRotation;
@@ -1294,8 +1242,8 @@ namespace ytail::net {
             correction.total += error;
             correction.totalAngle += angleBetween(predictedRotation, rotation);
             ++correction.count;
-            // The worst body decides the column: an average over a mostly settled world would hide
-            // the one that was wrong, which is the only one worth looking at.
+            // The worst body decides the column, since an average over a mostly settled world would
+            // hide the one that was wrong.
             tickCorrection = std::max(tickCorrection, error);
             if (error > CorrectionMarkerMinimum) {
                 correctionMarkers.push_back({ received.predicted, position, localTick });
@@ -1314,13 +1262,12 @@ namespace ytail::net {
         const auto cached = entityByNetId.find(netId);
         if (cached != entityByNetId.end()) return cached->second;
 
-        // Both peers load the same scene and scene loading preserves entity ids, so the host's id
-        // names our copy too. A runtime spawned entity has no local copy and needs spawn data.
+        // Scene loading preserves entity ids, so the host's id names our copy too. A runtime spawned
+        // entity has no local copy and needs spawn data.
         World& world = engine->getWorld();
         if (world.getEntity(hostEntityId) == nullptr || world.get<NetworkComponent>(hostEntityId) == nullptr) {
-            // Both peers load the same scene file, so this means they did not: a stale copy, an
-            // unsaved edit, or an entity the host spawned at runtime. Whatever it is, this body will
-            // never be replicated here, and it fails silently otherwise.
+            // The two scenes differ, whether from a stale copy, an unsaved edit, or a runtime spawn.
+            // This body will never be replicated here, and it fails silently otherwise.
             if (sceneMismatchWarning.due()) {
                 SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                             "The host is replicating netId %u as entity %u, which does not exist "
@@ -1336,9 +1283,8 @@ namespace ytail::net {
         return hostEntityId;
     }
 
-    // Held briefly rather than applied on arrival: packets clump, and a clump puts objects from
-    // different packets out of phase in time, which pops anything stacked on something else.
-    // reference: https://www.gafferongames.com/post/state_synchronization/
+    // Held briefly rather than applied on arrival, because packets clump and a clump puts objects
+    // from different packets out of phase in time, which pops anything stacked on something else.
     void ReplicationManager::applyBufferedState() {
         World& world = engine->getWorld();
         // Applied in place rather than consumed, so a duplicate arriving later still finds its tick
@@ -1346,9 +1292,8 @@ namespace ytail::net {
         // packet dragging the world backwards.
         for (const WorldSnapshot& snapshot : receivedHistory) {
             if (snapshot.tick <= appliedTick) continue;
-            // Released at a fixed transit rather than after a fixed wait, so however unevenly
-            // packets arrive they are applied evenly: an early one waits, a late one goes straight
-            // through.
+            // Released at a fixed transit rather than after a fixed wait, so an early packet waits
+            // and a late one goes straight through.
             if (localTick < snapshot.tick + jitter.target) break;
 
             for (const EntitySnapshot& entity : snapshot.entities) {
@@ -1392,10 +1337,9 @@ namespace ytail::net {
                 glm::vec3 hostAngular;
                 dequantizeState(received.state, hostPosition, hostRotation, hostLinear, hostAngular);
 
-                // The error line runs to where we had this body at the tick the ghost describes, not
-                // to where it stands now. A ghost trails the body by the clock lead plus the trip
-                // plus the jitter hold whatever happens, and none of that is error: only the gap to
-                // the prediction is. Green while we agree, red as that gap opens.
+                // Measured against where we had this body at the tick the ghost describes, not where
+                // it stands now. A ghost trails the body by the clock lead plus the trip plus the
+                // jitter hold whatever happens, and none of that is error.
                 const float divergence = received.hadPrediction
                     ? glm::distance(hostPosition, received.predicted) : 0.0f;
                 const float scaled = glm::clamp(divergence / DivergenceFullScale, 0.0f, 1.0f);
@@ -1404,13 +1348,13 @@ namespace ytail::net {
                 debug.wireSphere(hostPosition, 0.25f, color, 12);
                 if (received.hadPrediction) debug.line(hostPosition, received.predicted, color);
                 // Where the host thinks it is heading. A ghost sitting still while our copy moves
-                // means the host is not applying the input that is driving it here.
+                // means the host is not applying the input driving it here.
                 if (!received.state.atRest) {
                     debug.arrow(hostPosition, hostPosition + hostLinear * 0.25f,
                                 glm::vec4(0.4f, 0.7f, 1.0f, 1.0f));
                 }
 
-                // The lie: simulated pose to drawn pose. Long means a big correction is mid-fade.
+                // Simulated pose to drawn pose. Long means a big correction is mid-fade.
                 if (showVisualOffset && rigidbody != nullptr) {
                     const glm::vec3 simulated = transform->getPosition();
                     const glm::vec3 drawn = simulated + rigidbody->getVisualPositionError();
@@ -1531,9 +1475,8 @@ namespace ytail::net {
         stats.inKbPerSec = receivedBytes.bytesPerSecond / 1024.0f;
         stats.outKbPerSec = sentBytes.bytesPerSecond / 1024.0f;
 
-        // A client reports the host's link specifically: it also holds links to its peers now, and
-        // the ping to one of those says nothing about the clock. A host has no single link, so it
-        // reports the worst of them, that being the client having the hardest time of it.
+        // A client reports the host's link specifically, since the ping to a peer link says nothing
+        // about the clock. A host has no single link, so it reports the worst of them.
         NetConnectionStats link;
         if (stats.hosting) {
             for (const uint32_t connection : connections) {
@@ -1550,16 +1493,14 @@ namespace ytail::net {
         if (stats.hosting) {
             stats.replicatedEntities = lastSnapshotEntities;
         } else {
-            // What the local player actually feels: input read this frame is filed for a tick this
-            // far ahead, and their own ball does not act on it until then.
+            // What the local player actually feels, since their own ball does not act until then.
             stats.inputDelayTicks = static_cast<int>(inputDelayTicks);
             stats.inputLagMs = static_cast<float>(inputDelayTicks) * msPerTick;
             stats.inputLeadTicks = measuredInputLead;
             stats.inputLeadTarget = inputLeadTarget();
             stats.jitterHoldTicks = static_cast<int>(jitter.target);
             stats.jitterHoldMs = static_cast<float>(jitter.target) * msPerTick;
-            // Nothing applied yet is not an infinitely old world, it is no world at all, and the
-            // line under this one already says so.
+            // Nothing applied yet is no world at all rather than an infinitely old one.
             stats.stateAgeMs = appliedTick != 0 && localTick > appliedTick
                              ? static_cast<float>(localTick - appliedTick) * msPerTick : 0.0f;
             stats.correctionMean = correction.mean;
@@ -1602,8 +1543,8 @@ namespace ytail::net {
                     continue;
                 }
                 ImGui::Text("Acked tick: %llu", static_cast<unsigned long long>(client.ackedTick));
-                // Skipped is the budget doing its job. Ticks since sent is whether it is fair:
-                // a number that keeps climbing means something is starving.
+                // Skipped is the budget doing its job. Ticks since sent is whether it is fair, so a
+                // number that keeps climbing means something is starving.
                 ImGui::Text("Skipped by budget: %d", client.lastSkippedEntities);
                 ImGui::Text("Worst ticks since sent: %llu",
                             static_cast<unsigned long long>(client.worstTicksSinceSent));
@@ -1614,9 +1555,8 @@ namespace ytail::net {
                 }
                 ImGui::TreePop();
             }
-            // Age is expected to sit near our lead plus the trip from the host: we simulate ahead
-            // of the input we hold for anyone else. Growing without bound means they stopped
-            // sending. starved counts only ticks driven with nothing at all.
+            // Age should sit near the clock lead plus the trip from the host. Growing without bound
+            // means that peer stopped sending.
             for (const auto& [peerId, history] : inputByPeer) {
                 ImGui::Text("peer %u input: %lld ticks old, %d repeated, %d starved", peerId,
                             static_cast<long long>(static_cast<int64_t>(localTick) - static_cast<int64_t>(history.newestTick)),
@@ -1628,36 +1568,34 @@ namespace ytail::net {
             ImGui::Text("Applied tick: %llu (%llu behind)",
                         static_cast<unsigned long long>(appliedTick),
                         static_cast<unsigned long long>(newestReceivedTick - appliedTick));
-            // How far each snap moves a body. Near zero means the local sim agreed with the host;
-            // this is the number every prediction change is judged against.
+            // How far each snap moves a body, and the number every prediction change is judged
+            // against. Near zero means the local simulation agreed with the host.
             ImGui::Text("Correction: %.3f m mean, %.3f m peak, %.1f deg mean",
                         correction.mean, correction.peak, glm::degrees(correction.meanAngle));
             ImGui::PlotLines("##correction", correctionHistory.data(),
                              static_cast<int>(correctionHistory.size()), correctionHistoryIndex,
                              nullptr, 0.0f, 0.5f, ImVec2(0.0f, 40.0f));
-            // The hold is what the connection asked for, not what it was configured with. It rises
-            // the moment a packet lands later than the current one covers and eases back down.
-            // Worst transit sitting far above it means the estimator has shrunk since the spike.
+            // The hold is what the connection asked for, not what it was configured with. Worst
+            // transit sitting far above it means the estimator has shrunk since a spike.
             ImGui::Text("Buffered: %d packets, holding %llu ticks (worst transit %llu)",
                         static_cast<int>(receivedHistory.size()),
                         static_cast<unsigned long long>(jitter.target),
                         static_cast<unsigned long long>(jitter.worstTransit));
-            // Should sit at the target. Drifting below it means our input is reaching the host
-            // late and it is having to guess; the clock steering is what holds it there.
+            // Should sit at the target. Drifting below means our input is reaching the host late
+            // and it is having to guess.
             ImGui::Text("Input lead: %d ticks (target %d, %llu of it delay), %d clock adjustments",
                         measuredInputLead, inputLeadTarget(),
                         static_cast<unsigned long long>(inputDelayTicks), clockAdjustments);
             ImGui::Text("Seeded lead from ping: %llu ticks",
                         static_cast<unsigned long long>(leadFromPing()));
             ImGui::SeparatorText("Resimulation");
-            // Extra physics on top of the one step a tick normally runs, so 60 here means the
-            // simulation is doing twice the work.
+            // Extra physics on top of the one step a tick normally runs, so 60 here is twice the
+            // work.
             ImGui::Text("Replayed steps: %.0f/s, last %d deep, worst %d",
                         resimStepsPerSecond, lastResimDepth, deepestResim);
             // High is good: the prediction was already right and nothing had to be replayed.
             ImGui::Text("Prediction kept: %d packets", predictionsKept);
-            // Replays driven by a peer's input landing after we had already guessed that tick. A
-            // press cannot be recovered any other way: the tick it belongs to is behind us.
+            // A press cannot be recovered any other way, since the tick it belongs to is behind us.
             ImGui::Text("Late input replays: %d", lateInputReplays);
             if (snappedTooDeep > 0 || snappedIncomplete > 0) {
                 // Each of these left the world a rollback's worth of time in the past.
@@ -1670,9 +1608,8 @@ namespace ytail::net {
             ImGui::Text("Mapped entities: %d", static_cast<int>(entityByNetId.size()));
             // Zero while nothing moves is at-rest detection working.
             ImGui::Text("Entities in last packet: %d", lastReceivedChanged);
-            // Age is expected to sit near our lead plus the trip from the host: we simulate ahead
-            // of the input we hold for anyone else. Growing without bound means they stopped
-            // sending. starved counts only ticks driven with nothing at all.
+            // Age should sit near the clock lead plus the trip from the host. Growing without bound
+            // means that peer stopped sending.
             for (const auto& [peerId, history] : inputByPeer) {
                 ImGui::Text("peer %u input: %lld ticks old, %d starved", peerId,
                             static_cast<long long>(static_cast<int64_t>(localTick) - static_cast<int64_t>(history.newestTick)),

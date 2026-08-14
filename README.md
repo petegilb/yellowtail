@@ -81,6 +81,12 @@ Current workflow: fastest iteration loop, edit HLSL and re-run. The trade-off is
 - **hybrid**: precompile HLSL → SPIR-V offline using the `shadercross` CLI, then translate SPIR-V → DXIL/MSL at runtime via SPIRV-Cross. Drops the DXC runtime dep. Flip `SDLSHADERCROSS_DXC=OFF` and `SDLSHADERCROSS_CLI=ON` in `CMakeLists.txt`.
 - **full offline**: precompile to all three formats offline, pick at runtime with `SDL_GetGPUShaderFormats(device)`. No runtime translator dep. Most work, smallest binary.
 
+## Networking
+
+**The replication model, the wire format, and the tuning constants are in [docs/netcode.md](docs/netcode.md).** Read that before changing anything under `src/engine/net/`.
+
+`src/engine/net/` is gated behind `YELLOWTAIL_WITH_NETWORKING` (default `OFF`) because it needs SteamNetworkingSockets headers that only a consumer supplies, so the CMake source globs filter `/net/` out unless the option is on. A standalone yellowtail build never compiles it.
+
 ## CMake notes
 
 A few non-obvious decisions in `CMakeLists.txt`:

@@ -11,6 +11,7 @@
 #include <glm/vec3.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+// Bit packing and quantization for the wire. See docs/netcode.md, "Wire format".
 namespace ytail::net {
     // Bits needed to hold every value in [min, max].
     constexpr int bitsRequired(const int32_t min, const int32_t max) {
@@ -21,20 +22,18 @@ namespace ytail::net {
         return bits;
     }
 
-    // NOTE: DESIGN LIMIT: the replicated world is a cube of +/- WorldExtentMeters about the origin.
-    // Position is range encoded, so a body outside it clamps to the boundary and freezes there for
-    // every remote peer while the owner keeps simulating it. Levels must fit, and anything that can
-    // leave (knocked off a ledge) needs a kill volume. Growing the world is a one-line change here
-    // since every bit width below follows from bitsRequired.
+    // DESIGN LIMIT: the replicated world is a cube of +/- WorldExtentMeters about the origin. A body
+    // outside it freezes at the boundary for every remote peer, so levels must fit and anything that
+    // can leave needs a kill volume. Growing it is a one-line change, every bit width below follows.
     inline constexpr float WorldExtentMeters = 256.0f;
-    // might need to tune this depending on how much positions change when a Jolt body is at rest
-    // so delta compression doesn't fire when it doesn't need to
+    // Might need tuning against how much a resting Jolt body's position drifts, so delta compression
+    // does not fire when it does not need to.
     inline constexpr float PositionUnitsPerMeter = 512.0f;
     inline constexpr int32_t PositionMax = static_cast<int32_t>(WorldExtentMeters * PositionUnitsPerMeter) - 1;
     inline constexpr int32_t PositionMin = -PositionMax - 1;
 
-    // Velocities are bounded well below BodyProperties::maxLinearVelocity: this covers what a body
-    // realistically reaches, not the theoretical cap, since every extra bit is paid per update.
+    // Bounded well below BodyProperties::maxLinearVelocity, covering what a body realistically
+    // reaches rather than the theoretical cap, since every extra bit is paid per update.
     inline constexpr float MaxLinearSpeed = 128.0f;
     inline constexpr float LinearUnitsPerMeterPerSecond = 16.0f;
     inline constexpr int32_t LinearMax = static_cast<int32_t>(MaxLinearSpeed * LinearUnitsPerMeterPerSecond) - 1;
@@ -45,14 +44,9 @@ namespace ytail::net {
     inline constexpr int32_t AngularMax = static_cast<int32_t>(MaxAngularSpeed * AngularUnitsPerRadianPerSecond) - 1;
     inline constexpr int32_t AngularMin = -AngularMax - 1;
 
-    // State is quantized, and deltas compare these integers rather than the source floats. Raw
-    // floats jitter in their low bits and never compare equal.
-    // reference: https://www.gafferongames.com/post/snapshot_compression/
-    //
-    // Velocity travels with the pose because remote peers simulate this body rather than
-    // interpolate it, and a body handed a position with no momentum coasts to a halt between
-    // updates. atRest carries the two velocities implicitly and keeps settled bodies off the wire.
-    // reference: https://www.gafferongames.com/post/state_synchronization/
+    // Deltas compare these integers rather than the source floats, which jitter in their low bits
+    // and never compare equal. Velocity travels with the pose because remote peers simulate this
+    // body rather than interpolate it, and atRest carries both velocities implicitly.
     struct QuantizedState {
         int32_t position[3] = { 0, 0, 0 };
         uint32_t rotation = 0;
@@ -64,7 +58,7 @@ namespace ytail::net {
     };
 
     // Clamps to the wire bounds here rather than in the serializer, so serializeInt's clamp warning
-    // stays a genuine programmer-error signal instead of firing per axis per entity per packet.
+    // stays a programmer-error signal instead of firing per axis per entity per packet.
     QuantizedState quantizeState(const glm::vec3& position, const glm::quat& rotation,
                                  const glm::vec3& linear, const glm::vec3& angular, bool atRest);
     void dequantizeState(const QuantizedState& state, glm::vec3& outPosition, glm::quat& outRotation,
@@ -89,7 +83,7 @@ namespace ytail::net {
     }
 
     // What a field will cost before it is written, so a sender can fill a packet to a byte budget
-    // rather than to a worst case. Both mirror the writers above by hand and have to move with them.
+    // rather than to a worst case. Both mirror the writers above by hand and must move with them.
     constexpr int varUIntBits(uint32_t value) {
         int bytes = 1;
         while (value >= 0x80u) {
@@ -105,9 +99,12 @@ namespace ytail::net {
         return poseBits + 3 * bitsRequired(LinearMin, LinearMax) + 3 * bitsRequired(AngularMin, AngularMax);
     }
 
-    // One tick of a player's input, as an opaque bit field: the engine moves it around and the game
-    // decides what the bits mean. Replicated rather than derived, because a peer simulating someone
-    // else's body has to know what is driving it or the body coasts to a halt between updates.
+    // One tick of a player's input, as an opaque bit field. The engine moves it around and the game
+    // decides what the bits mean. Replicated rather than derived, since a peer simulating someone
+    // else's body has to know what is driving it.
+    //
+    // Every bit must mean "I am holding this", never "pressed just now". A late frame is covered by
+    // carrying the previous one forward, which is only safe for a held bit.
     struct NetInputFrame {
         uint32_t buttons = 0;
 
@@ -115,18 +112,17 @@ namespace ytail::net {
     };
 
     inline constexpr int NetInputButtonBits = 8;
-    // Every packet repeats the last few frames, so a lost packet costs nothing as long as one of
-    // the next few arrives. Same trick as deterministic lockstep.
+    // Every packet repeats the last few frames, so a lost packet costs nothing as long as one of the
+    // next few arrives. Same trick as deterministic lockstep.
     inline constexpr int NetInputRedundancy = 16;
 
     // Section markers, so read/write drift is caught instead of corrupting later fields.
     inline constexpr bool NetSerializeChecks = true;
     inline constexpr uint32_t CheckInput = 0xA5;
 
-    // Bits accumulate in a 64-bit scratch and spill to the buffer a 32-bit word at a time, so a
-    // field costs one shift-or rather than a write per bit. Storage is uint32 for that reason:
-    // the buffer must be word aligned and a whole number of words.
-    // reference: https://www.gafferongames.com/post/reading_and_writing_packets/
+    // Bits accumulate in a 64-bit scratch and spill a 32-bit word at a time, so a field costs one
+    // shift-or rather than a write per bit. Storage is uint32 for that reason, and the buffer must
+    // be word aligned and a whole number of words.
     class BitWriter {
     public:
         BitWriter(uint32_t* inWords, int wordCount);
