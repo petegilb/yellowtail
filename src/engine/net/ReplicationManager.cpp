@@ -120,11 +120,12 @@ namespace ytail::net {
         const size_t newestSlot = newestTick % Length;
         if (ticks[newestSlot] != newestTick) return {};
 
+        ++repeated;
         // Held bits carry forward, edges do not: this frame is standing in for a tick it was not
         // sent for, and an edge belongs to the one tick it was actually pressed on.
-        NetInputFrame repeated = frames[newestSlot];
-        repeated.buttons &= ~NetInputFrame::edgeButtons;
-        return repeated;
+        NetInputFrame carried = frames[newestSlot];
+        carried.buttons &= ~NetInputFrame::edgeButtons;
+        return carried;
     }
 
     // Shortest angle between two orientations. The absolute value folds q and -q together, which
@@ -227,13 +228,18 @@ namespace ytail::net {
         const Uint64 target = tick + inputDelayTicks;
 
         // Raising the delay steps over a tick, which every peer would otherwise read as a moment of
-        // no input at all. Filling the gap with this frame is what repeating would have given anyway.
+        // no input at all. The gap is filled with the held buttons only: an edge belongs to the one
+        // tick it was pressed on, and copying it across the gap would fire it once per filled tick
+        // on every machine that reads them back as real frames.
+        NetInputFrame held;
+        held.buttons = frame.buttons & ~NetInputFrame::edgeButtons;
         Uint64 first = target;
         if (history.newestTick > 0 && history.newestTick < target
             && target - history.newestTick <= InputHistory::Length) {
             first = history.newestTick + 1;
         }
-        for (Uint64 fill = first; fill <= target; ++fill) history.write(fill, frame);
+        for (Uint64 fill = first; fill < target; ++fill) history.write(fill, held);
+        history.write(target, frame);
     }
 
     // The delay has to cover the trip this peer's input takes to whoever simulates its body, and the
@@ -1583,9 +1589,9 @@ namespace ytail::net {
             // of the input we hold for anyone else. Growing without bound means they stopped
             // sending. starved counts only ticks driven with nothing at all.
             for (const auto& [peerId, history] : inputByPeer) {
-                ImGui::Text("peer %u input: %lld ticks old, %d starved", peerId,
+                ImGui::Text("peer %u input: %lld ticks old, %d repeated, %d starved", peerId,
                             static_cast<long long>(static_cast<int64_t>(localTick) - static_cast<int64_t>(history.newestTick)),
-                            history.starved);
+                            history.repeated, history.starved);
             }
         } else {
             ImGui::Text("Peer id: %u", localPeerId);

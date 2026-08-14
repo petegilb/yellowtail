@@ -385,7 +385,7 @@ namespace ytail::net {
         if (!active) return;
 
         for (const uint32_t connection : connections) {
-            sockets->CloseConnection(connection, 0, "shutting down", false);
+            sockets->CloseConnection(connection, 0, "shutting down", true);
         }
         connections.clear();
 

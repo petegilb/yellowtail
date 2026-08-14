@@ -76,6 +76,9 @@ namespace ytail::net {
         // MaxInputStaleTicks. Repeating the newest frame is not counted: that is the normal case
         // for anyone but ourselves, since we simulate ahead of what we hold for them.
         int starved = 0;
+        // Ticks driven with a repeat of an older frame because the exact one had not arrived. Held
+        // buttons survive that; a press does not, so this is what a missing jump looks like.
+        int repeated = 0;
 
         void write(Uint64 tick, const NetInputFrame& frame);
         // Exactly what was stored for this tick, or neutral. Does not count as starvation.
