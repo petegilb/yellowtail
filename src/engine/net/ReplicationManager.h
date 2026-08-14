@@ -19,7 +19,9 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "NetArchive.h"
+#include "NetGraph.h"
 #include "engine/Entity.h"
+#include "engine/managers/PhysicsManager.h"
 
 namespace ytail {
     class Engine;
@@ -36,8 +38,19 @@ namespace ytail::net {
         int bytesThisWindow = 0;
         float bytesPerSecond = 0.0f;
         Uint64 windowStartMs = 0;
+        // The same bytes over a single tick, drained into one netgraph column. Separate from the
+        // window because the graph wants the shape of the traffic, not its average.
+        int bytesThisTick = 0;
 
-        void add(const int bytes) { bytesThisWindow += bytes; }
+        void add(const int bytes) {
+            bytesThisWindow += bytes;
+            bytesThisTick += bytes;
+        }
+        int takeTickBytes() {
+            const int bytes = bytesThisTick;
+            bytesThisTick = 0;
+            return bytes;
+        }
     };
 
     struct EntitySnapshot {
@@ -120,6 +133,17 @@ namespace ytail::net {
         float peak = 0.0f;
     };
 
+    // A condition that persists rather than an event that happened once, so the log is throttled:
+    // the first one is the useful one and a per-tick repeat would bury everything around it. The
+    // count of swallowed repeats goes out with the next line, so a rare condition and a constant one
+    // do not read the same.
+    struct ThrottledWarning {
+        Uint64 lastLoggedMs = 0;
+        int suppressed = 0;
+
+        [[nodiscard]] bool due();
+    };
+
     // One applied correction, kept briefly so it can be seen after the fact.
     struct CorrectionMarker {
         glm::vec3 from{0.0f};
@@ -148,6 +172,10 @@ namespace ytail::net {
         Uint64 ackedTick = 0;
         // Ticks this client's input is arriving ahead of the tick we are about to simulate.
         int32_t inputLead = 0;
+
+        // How other clients reach this one directly, learned from its PeerHello and handed to
+        // everybody in the roster.
+        uint64_t peerAddress = 0;
 
         // All indexed by netId, grown on demand.
         std::vector<float> priority;
@@ -193,6 +221,13 @@ namespace ytail::net {
         void onConnected(uint32_t connection);
         void onDisconnected(uint32_t connection);
         void drawDebugUI();
+        // The overlay: a per-tick strip of how the connection is behaving, plus the numbers under it.
+        // Drawn outside the debug window on purpose, so it survives closing it.
+        void drawNetGraph();
+        // The toggle and where it sits. Meant for the top of the debug window: the point of the
+        // graph is to be reachable without scrolling past everything else first.
+        void drawNetGraphControls();
+        [[nodiscard]] NetGraph& getNetGraph() { return netGraph; }
 
         // Appends every replicated body's pose, as this peer sees it, once per tick. Joining two
         // peers' traces on (tick, netId) is the only way to ask "did A predict B correctly" without
@@ -250,6 +285,17 @@ namespace ytail::net {
         // ticks does that on a local connection. It cannot scale to a real internet trip, where the
         // delay would have to be longer than the lag it was hiding.
         static Uint64 inputDelayTicks;
+        // Follow the connection instead of holding a number that is wasteful on a good link and
+        // short on a bad one. Peers do not have to agree on it: a peer's delay only decides how
+        // early its own input reaches everyone else.
+        static bool adaptiveInputDelay;
+        // Ceiling on that. Past it prediction degrades rather than the controls getting heavier, and
+        // what degrades first is only the host's ball: that one costs a round trip, our input out and
+        // its input back, while a body predicted over a direct link costs one hop and stays covered.
+        static Uint64 maxInputDelayTicks;
+        static constexpr Uint64 MinInputDelayTicks = 2;
+        // Ticks between adjustments, so the delay does not chase every ping sample.
+        static constexpr int InputDelayAdjustCooldown = 60;
         // How far a body may sit from where the host put it before the whole world is rewound and
         // replayed. Under this the prediction was good enough to keep, and a resimulation would burn
         // steps arriving where we already are. Loose enough to absorb the 2mm the wire quantizes to
@@ -304,9 +350,13 @@ namespace ytail::net {
         // plus a send interval: about 30 ticks at 300ms. It must also stay under InputHistory::Length,
         // since a replay is only as good as the input it can still look up.
         static constexpr Uint64 MaxRollbackTicks = 48;
+        // A replay needs a saved contact set and the input to feed it for every tick it covers, so
+        // the rollback window can never outgrow either ring.
+        static_assert(MaxRollbackTicks < physics::PhysicsManager::MaxSavedContacts,
+                      "rollback window exceeds the saved contact ring");
 
     private:
-        [[nodiscard]] QuantizedState captureState(EntityId id, const TransformComponent& transform) const;
+        [[nodiscard]] QuantizedState captureState(EntityId id, const TransformComponent& transform);
         void captureHost(Uint64 tick);
         void sendStateTo(uint32_t connection, ClientSyncState& client, Uint64 tick);
         // How much this client wants this entity right now, before the accumulator adds it up.
@@ -319,12 +369,22 @@ namespace ytail::net {
         // Client to host: the state ack plus this peer's recent input frames.
         void onClientInputMessage(uint32_t connection, int size);
         void sendClientInput();
+        // Client to host on joining: where other clients can reach us.
+        void sendPeerHello();
+        void onPeerHelloMessage(uint32_t connection, int size);
+        // Host to clients whenever the membership changes, so each one can dial the others. Input
+        // relayed through the host arrives a hop later than input sent straight across, and that hop
+        // is the largest part of what a client gets wrong about another client.
+        void sendPeerRoster();
+        void onPeerRosterMessage(int size);
         // Redundant window of one peer's input, shared by the client's upload and the host's
         // rebroadcast of everyone else's.
         template<typename Stream>
         void serializeInputWindow(Stream& stream, uint32_t peerId, Uint64 newestTick);
         void steerClock(int32_t reportedLead);
-        [[nodiscard]] Uint64 leadFromPing() const;
+        [[nodiscard]] Uint64 leadFromPing();
+        [[nodiscard]] Uint64 oneWayTicks() const;
+        void steerInputDelay();
         void onWelcomeMessage(int size);
         void sendWelcome(uint32_t connection, uint32_t peerId);
         // Drains the jitter buffer: snapshots held long enough are applied, oldest first.
@@ -350,10 +410,12 @@ namespace ytail::net {
         void sampleBandwidth();
         void writeTrace(Uint64 tick);
         void sampleCorrection();
+        // Closes off one netgraph column at the end of a tick and starts the next one.
+        void sampleNetGraph();
         // Runtime sliders for the rates and the smoothing, drawn inside debugUI.
         void drawTuning();
-        // Ticks our input is stamped ahead of the host, clock lead and delay together.
-        [[nodiscard]] static int32_t inputLeadTarget();
+        // Ticks of our input the host should hold beyond the tick it is simulating.
+        [[nodiscard]] int32_t inputLeadTarget() const;
         void drawEntityTable();
 
         Engine* engine = nullptr;
@@ -375,6 +437,11 @@ namespace ytail::net {
         std::unordered_map<uint32_t, ClientSyncState> clients;
 
         uint32_t localPeerId = 0;
+        // Which connection is the host's, so a client can tell it apart from the other clients that
+        // dial in for input. 0 until we have one.
+        uint32_t hostConnection = 0;
+        // Peers we have already dialled, so a repeated roster does not open a second connection.
+        std::vector<uint64_t> dialledPeers;
 
         // The jitter buffer. Snapshots wait here until the local tick reaches their tick plus the
         // measured hold, sorted so they are released in the order the host produced them.
@@ -386,6 +453,7 @@ namespace ytail::net {
         int32_t measuredInputLead = 0;
         int clockAdjustments = 0;
         int clockCooldown = 0;
+        int inputDelayCooldown = 0;
 
         // Newest state the host sent for each entity, kept so a ghost stays put instead of blinking
         // out whenever that entity misses a packet's budget.
@@ -399,9 +467,18 @@ namespace ytail::net {
         Uint64 newestContactTick = 0;
         bool contactsValid = false;
 
+        ThrottledWarning budgetWarning;
+        ThrottledWarning worldBoundWarning;
+        ThrottledWarning velocityRangeWarning;
+        ThrottledWarning sceneMismatchWarning;
+        ThrottledWarning replaySkippedWarning;
+        ThrottledWarning connectionCapWarning;
+
         // Packets that needed no resimulation because the prediction already matched. Climbing
         // steadily is the whole system working: the client guessed right and paid nothing.
         int predictionsKept = 0;
+        // Packets the question was asked of, so the above can be read as a share rather than a count.
+        int predictionsChecked = 0;
         // What a resimulation costs. Depth times rate is the extra physics being run, so replayed
         // steps per second against the 60 a tick normally costs is the number to watch.
         int lastResimDepth = 0;
@@ -422,6 +499,19 @@ namespace ytail::net {
         Uint64 correctionWindowStartMs = 0;
         BandwidthMeter sentBytes;
         BandwidthMeter receivedBytes;
+
+        NetGraph netGraph;
+        // Filled as the tick runs, drained into one column at the end of it.
+        float tickCorrection = 0.0f;
+        int tickResimDepth = 0;
+        uint8_t tickFlags = 0;
+        // Starvation is a running total per peer, so a column shows the change rather than the sum.
+        int starvedTotal = 0;
+        // Snapshots the host sent that never arrived, counted from the gaps in the tick numbers
+        // rather than from the backend, so it measures what the simulation actually went without.
+        int lostSnapshots = 0;
+        Uint64 lastArrivedTick = 0;
+
         std::ofstream traceFile;
     };
 } // ytail::net

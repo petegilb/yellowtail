@@ -88,7 +88,8 @@ namespace ytail
         SDL_Log("Copied scene to the game build: %s", destination.string().c_str());
     }
 
-    void Editor::launchLocalMultiplayer(int instanceCount, const NetSimSettings& netSim) {
+    void Editor::launchLocalMultiplayer(int instanceCount, const NetSimSettings& netSim,
+                                        const bool netGraph) {
         if (gameExecutable.empty() || instanceCount < 1) return;
 
         mirrorSceneToGame();
@@ -104,6 +105,7 @@ namespace ytail
                 i == 0 ? "host" : "connect",
                 "--window-index", indexArg.c_str(),
             };
+            if (netGraph) args.push_back("--netgraph");
             for (const std::string& arg : netSimArgs) args.push_back(arg.c_str());
             args.push_back(nullptr);
 

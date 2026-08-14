@@ -1147,6 +1147,9 @@ namespace ytail {
         if (showDebugWindow) {
             ImGui::Begin("yellowtail!");
             ImGui::Text("Debug Window...");
+#if YELLOWTAIL_WITH_NETWORKING
+            replication.drawNetGraphControls();
+#endif
             ImGui::ColorEdit3("Clear Color", reinterpret_cast<float*>(&clear_color));
             ImGui::SliderInt("FPS Lock", &framerateLock, -1, 999);
 
@@ -1250,6 +1253,12 @@ namespace ytail {
             if (app != nullptr) app->debugUI();
             ImGui::End();
         }
+
+#if YELLOWTAIL_WITH_NETWORKING
+        // Outside the debug window on purpose: the graph is meant to be watched while playing, with
+        // the window that toggles it closed.
+        replication.drawNetGraph();
+#endif
 
         // The app (editor) contributes its own windows inside the same ImGui frame.
         if (app) app->uiTick();

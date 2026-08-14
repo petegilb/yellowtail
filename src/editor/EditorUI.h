@@ -127,6 +127,8 @@ namespace ytail {
         // Local multiplayer test launcher: number of instances to spawn + the conditions they run under.
         int multiplayerInstanceCount = 2;
         NetSimSettings multiplayerNetSim;
+        // On by default: an instance launched from here exists to be watched under lag.
+        bool multiplayerNetGraph = true;
     };
 } // ytail
 

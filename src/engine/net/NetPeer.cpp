@@ -70,10 +70,23 @@ namespace ytail::net {
         }
     }
 
+    // Loopback and LAN peers have no Steam cert, so an IP connection has to be let through without
+    // one. A relay connection never gets it: over Steam both ends have a real identity, and waiving
+    // that is a deliberate act rather than something a peer helper should do on the way past.
+    int NetPeer::transportOptions(SteamNetworkingConfigValue_t& storage) const {
+        if (!localTransport) return 0;
+        storage.SetInt32(k_ESteamNetworkingConfig_IP_AllowWithoutAuth, 1);
+        return 1;
+    }
+
+    void NetPeer::ensurePollGroup() {
+        if (pollGroup == k_HSteamNetPollGroup_Invalid) pollGroup = sockets->CreatePollGroup();
+    }
+
     bool NetPeer::startHost() {
         if (sockets == nullptr) return false;
 
-        pollGroup = sockets->CreatePollGroup();
+        ensurePollGroup();
         listenSocket = sockets->CreateListenSocketP2P(0, 0, nullptr);
         if (listenSocket == k_HSteamListenSocket_Invalid) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create a P2P listen socket.");
@@ -89,7 +102,7 @@ namespace ytail::net {
     bool NetPeer::connectTo(const uint64_t hostSteamId) {
         if (sockets == nullptr) return false;
 
-        pollGroup = sockets->CreatePollGroup();
+        ensurePollGroup();
 
         SteamNetworkingIdentity identity{};
         identity.Clear();
@@ -113,17 +126,16 @@ namespace ytail::net {
     bool NetPeer::startHostIP(const uint16_t port) {
         if (sockets == nullptr) return false;
 
-        pollGroup = sockets->CreatePollGroup();
+        localTransport = true;
+        ensurePollGroup();
 
         SteamNetworkingIPAddr address{};
         address.Clear();
         address.SetIPv4(0, port);
 
-        // Loopback / LAN peers have no Steam cert, so allow unauthenticated IP connections.
-        SteamNetworkingConfigValue_t allowWithoutAuth{};
-        allowWithoutAuth.SetInt32(k_ESteamNetworkingConfig_IP_AllowWithoutAuth, 1);
-
-        listenSocket = sockets->CreateListenSocketIP(address, 1, &allowWithoutAuth);
+        SteamNetworkingConfigValue_t options{};
+        const int optionCount = transportOptions(options);
+        listenSocket = sockets->CreateListenSocketIP(address, optionCount, optionCount > 0 ? &options : nullptr);
         if (listenSocket == k_HSteamListenSocket_Invalid) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "Failed to create an IP listen socket on port %u.", port);
@@ -139,16 +151,16 @@ namespace ytail::net {
     bool NetPeer::connectToIP(const uint16_t port) {
         if (sockets == nullptr) return false;
 
-        pollGroup = sockets->CreatePollGroup();
+        localTransport = true;
+        ensurePollGroup();
 
         SteamNetworkingIPAddr address{};
         address.Clear();
         address.SetIPv4(0x7f000001, port); // 127.0.0.1
 
-        SteamNetworkingConfigValue_t allowWithoutAuth{};
-        allowWithoutAuth.SetInt32(k_ESteamNetworkingConfig_IP_AllowWithoutAuth, 1);
-
-        const HSteamNetConnection connection = sockets->ConnectByIPAddress(address, 1, &allowWithoutAuth);
+        SteamNetworkingConfigValue_t options{};
+        const int optionCount = transportOptions(options);
+        const HSteamNetConnection connection = sockets->ConnectByIPAddress(address, optionCount, optionCount > 0 ? &options : nullptr);
         if (connection == k_HSteamNetConnection_Invalid) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "ConnectByIPAddress to 127.0.0.1:%u failed.", port);
             return false;
@@ -159,6 +171,62 @@ namespace ytail::net {
         hosting = false;
         active = true;
         SDL_Log("Connecting to local host 127.0.0.1:%u.", port);
+        return true;
+    }
+
+    // Deliberately leaves hosting alone: this peer accepts connections without becoming the
+    // authority for anything.
+    bool NetPeer::listenForPeers() {
+        if (sockets == nullptr || listenSocket != k_HSteamListenSocket_Invalid) return false;
+        ensurePollGroup();
+
+        SteamNetworkingConfigValue_t options{};
+        const int optionCount = transportOptions(options);
+        if (localTransport) {
+            SteamNetworkingIPAddr address{};
+            address.Clear();
+            address.SetIPv4(0, static_cast<uint16_t>(peerAddress));
+            listenSocket = sockets->CreateListenSocketIP(address, optionCount, optionCount > 0 ? &options : nullptr);
+        } else {
+            listenSocket = sockets->CreateListenSocketP2P(0, optionCount, optionCount > 0 ? &options : nullptr);
+        }
+
+        if (listenSocket == k_HSteamListenSocket_Invalid) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to open a peer listen socket.");
+            return false;
+        }
+        SDL_Log("Listening for peer input connections on %llu.",
+                static_cast<unsigned long long>(peerAddress));
+        return true;
+    }
+
+    bool NetPeer::connectToPeer(const uint64_t address) {
+        if (sockets == nullptr || address == 0 || address == peerAddress) return false;
+        ensurePollGroup();
+
+        SteamNetworkingConfigValue_t options{};
+        const int optionCount = transportOptions(options);
+        uint32_t connection = k_HSteamNetConnection_Invalid;
+        if (localTransport) {
+            SteamNetworkingIPAddr target{};
+            target.Clear();
+            target.SetIPv4(0x7f000001, static_cast<uint16_t>(address));
+            connection = sockets->ConnectByIPAddress(target, optionCount, optionCount > 0 ? &options : nullptr);
+        } else {
+            SteamNetworkingIdentity identity{};
+            identity.Clear();
+            identity.SetSteamID64(address);
+            connection = sockets->ConnectP2P(identity, 0, optionCount, optionCount > 0 ? &options : nullptr);
+        }
+
+        if (connection == k_HSteamNetConnection_Invalid) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to dial peer %llu.",
+                         static_cast<unsigned long long>(address));
+            return false;
+        }
+        sockets->SetConnectionPollGroup(connection, pollGroup);
+        connections.push_back(connection);
+        SDL_Log("Dialling peer %llu for input.", static_cast<unsigned long long>(address));
         return true;
     }
 
@@ -244,6 +312,21 @@ namespace ytail::net {
         return status.m_nPing;
     }
 
+    bool NetPeer::getStats(const uint32_t connection, NetConnectionStats& stats) const {
+        if (sockets == nullptr || connection == 0) return false;
+        SteamNetConnectionRealTimeStatus_t status{};
+        if (sockets->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) != k_EResultOK) return false;
+
+        stats.pingMs = status.m_nPing;
+        stats.qualityLocal = status.m_flConnectionQualityLocal;
+        stats.qualityRemote = status.m_flConnectionQualityRemote;
+        stats.inBytesPerSec = status.m_flInBytesPerSec;
+        stats.outBytesPerSec = status.m_flOutBytesPerSec;
+        stats.inPacketsPerSec = status.m_flInPacketsPerSec;
+        stats.outPacketsPerSec = status.m_flOutPacketsPerSec;
+        return true;
+    }
+
     // Nagle holds a partly-filled packet briefly so following messages can share it. That grouping
     // is worth having, but the last message of a tick has nothing to wait for, so flush once the
     // tick's sends are queued.
@@ -310,7 +393,8 @@ namespace ytail::net {
             sockets->DestroyPollGroup(pollGroup);
             pollGroup = 0;
         }
-        if (hosting && listenSocket != k_HSteamListenSocket_Invalid) {
+        // Not gated on hosting: a client listens for its peers too.
+        if (listenSocket != k_HSteamListenSocket_Invalid) {
             sockets->CloseListenSocket(listenSocket);
             listenSocket = 0;
         }

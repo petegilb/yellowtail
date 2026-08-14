@@ -13,11 +13,25 @@
 // The networking interfaces are provided by the app's backend (Steam or GameNetworkingSockets)
 class ISteamNetworkingSockets;
 class ISteamNetworkingUtils;
+struct SteamNetworkingConfigValue_t;
 
 namespace ytail::net {
     class INetworkEventHandler;
 
     enum class NetConnState { Connecting, Connected, Closed };
+
+    // What the backend knows about one connection right now, for the debug readouts. Quality is the
+    // share of packets that arrived in order, so the loss it implies is 1 - quality; it is negative
+    // until the connection has carried enough traffic to have an opinion.
+    struct NetConnectionStats {
+        int pingMs = -1;
+        float qualityLocal = -1.0f;
+        float qualityRemote = -1.0f;
+        float inBytesPerSec = 0.0f;
+        float outBytesPerSec = 0.0f;
+        float inPacketsPerSec = 0.0f;
+        float outPacketsPerSec = 0.0f;
+    };
 
     // First byte of every payload, so a receiver can route without guessing. Never renumber these.
     // Values from GameFirst up are the game's to define; the engine forwards them uninterpreted.
@@ -26,6 +40,8 @@ namespace ytail::net {
         ClientInput = 2,
         Welcome = 3,
         PeerInput = 4,
+        PeerHello = 5,
+        PeerRoster = 6,
         GameFirst = 128,
     };
 
@@ -47,6 +63,12 @@ namespace ytail::net {
         // Direct-IP variants for local testing (loopback / LAN): no relay, no second Steam account.
         bool startHostIP(uint16_t port);
         bool connectToIP(uint16_t port);
+
+        // A client accepting connections from other clients
+        bool listenForPeers();
+        bool connectToPeer(uint64_t address);
+        void setPeerAddress(const uint64_t address) { peerAddress = address; }
+        [[nodiscard]] uint64_t getPeerAddress() const { return peerAddress; }
 
         // Fake lag/jitter/loss for local testing. Global to the process and applied to sends, so a
         // round trip between two instances sees each one's lag once. Call any time after bind().
@@ -71,6 +93,8 @@ namespace ytail::net {
 
         // Round trip time in milliseconds, or -1 if the backend has no estimate yet
         [[nodiscard]] int getPingMs(uint32_t connection) const;
+        // False when the backend has nothing for this connection, leaving stats untouched.
+        [[nodiscard]] bool getStats(uint32_t connection, NetConnectionStats& stats) const;
 
         [[nodiscard]] bool isActive() const { return active; }
         [[nodiscard]] bool isHosting() const { return hosting; }
@@ -87,6 +111,12 @@ namespace ytail::net {
     private:
         void send(uint32_t connection, const void* data, uint32_t size, int sendFlags);
         void removeConnection(uint32_t connection);
+        // Created on whichever of host/connect/listen happens first
+        void ensurePollGroup();
+        // Fills storage with the options a connection on this transport needs and returns how many
+        // there are, so a caller cannot hand relaxed authentication to a relay connection by
+        // reaching for the wrong variable.
+        [[nodiscard]] int transportOptions(SteamNetworkingConfigValue_t& storage) const;
 
         ISteamNetworkingSockets* sockets = nullptr;
         ISteamNetworkingUtils* utils = nullptr;
@@ -99,8 +129,11 @@ namespace ytail::net {
         std::vector<uint32_t> connections;
         uint32_t listenSocket = 0;
         uint32_t pollGroup = 0;
+        uint64_t peerAddress = 0;
         bool hosting = false;
         bool active = false;
+        // Direct IP rather than the Steam relay, which changes what a peer address means.
+        bool localTransport = false;
     };
 } // ytail::net
 

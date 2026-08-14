@@ -886,8 +886,12 @@ namespace ytail
 
         drawNetSimSettings();
 
+        ImGui::Checkbox("Net graph", &multiplayerNetGraph);
+        ImGui::SetItemTooltip("Open the connection overlay in every instance from the first frame, "
+                              "the same as ticking it in each one's debug window.");
+
         if (ImGui::Button("Launch")) {
-            editor->launchLocalMultiplayer(multiplayerInstanceCount, multiplayerNetSim);
+            editor->launchLocalMultiplayer(multiplayerInstanceCount, multiplayerNetSim, multiplayerNetGraph);
         }
 
         const int running = editor->getRunningInstanceCount();

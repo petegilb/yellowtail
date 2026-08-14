@@ -58,8 +58,10 @@ namespace ytail
         void setGameExecutable(const std::string& path) { gameExecutable = path; }
         [[nodiscard]] bool canLaunchMultiplayer() const { return !gameExecutable.empty(); }
         // Spawn instanceCount local game processes: instance 0 hosts, the rest connect to it.
-        // Every instance gets the same simulated network conditions.
-        void launchLocalMultiplayer(int instanceCount, const NetSimSettings& netSim = {});
+        // Every instance gets the same simulated network conditions, and netGraph opens the
+        // connection overlay in each of them from the first frame.
+        void launchLocalMultiplayer(int instanceCount, const NetSimSettings& netSim = {},
+                                    bool netGraph = false);
         // Write the live scene into the game build's assets, so launching sees editor edits.
         void mirrorSceneToGame() const;
         // Kill every instance we spawned. Also runs from the destructor.
