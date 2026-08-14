@@ -138,6 +138,7 @@ namespace ytail::net {
         }
         sockets->SetConnectionPollGroup(connection, pollGroup);
         connections.push_back(connection);
+        hostConnection = connection;
 
         hosting = false;
         active = true;
@@ -197,6 +198,7 @@ namespace ytail::net {
         }
         sockets->SetConnectionPollGroup(connection, pollGroup);
         connections.push_back(connection);
+        hostConnection = connection;
 
         hosting = false;
         active = true;
@@ -425,6 +427,7 @@ namespace ytail::net {
         connections.erase(std::remove(connections.begin(), connections.end(), connection),
                           connections.end());
         remoteIds.erase(connection);
+        if (hostConnection == connection) hostConnection = 0;
     }
 
     void NetPeer::shutdown() {
@@ -435,6 +438,7 @@ namespace ytail::net {
         }
         connections.clear();
         remoteIds.clear();
+        hostConnection = 0;
 
         if (pollGroup != k_HSteamNetPollGroup_Invalid) {
             sockets->DestroyPollGroup(pollGroup);

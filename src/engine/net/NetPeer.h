@@ -96,6 +96,8 @@ namespace ytail::net {
         [[nodiscard]] int getPingMs(uint32_t connection) const;
         // Steam ID on the other end, or 0 on the local transport where every instance shares one.
         [[nodiscard]] uint64_t getRemoteId(uint32_t connection) const;
+        // The connection to the host, recorded when we connect: 0 on the host, and on a client until its connect succeeds.
+        [[nodiscard]] uint32_t getHostConnection() const { return hostConnection; }
         // False when the backend has nothing for this connection, leaving stats untouched.
         bool getStats(uint32_t connection, NetConnectionStats& stats) const;
 
@@ -135,6 +137,7 @@ namespace ytail::net {
         uint32_t listenSocket = 0;
         uint32_t pollGroup = 0;
         uint64_t peerAddress = 0;
+        uint32_t hostConnection = 0;
         bool hosting = false;
         bool active = false;
         // Direct IP rather than the Steam relay, which changes what a peer address means.
