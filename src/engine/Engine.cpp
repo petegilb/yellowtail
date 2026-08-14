@@ -1241,13 +1241,21 @@ namespace ytail {
 
             ImGui::ColorEdit3("Ambient Light", (float*)&ambientDebug);
             ImGui::SliderFloat("Ambient Intensity", &ambientIntensity, 0.0f, 10.0f);
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-            ImGui::Text("Draw Calls Last Frame %d", drawCallsLastFrame);
-            ImGui::Text("Point Shadows: %d lights, %d draws, %d culled, %d regen",
-                        pointShadowRenderer->getActiveLights(),
-                        pointShadowRenderer->getCasterDraws(),
-                        pointShadowRenderer->getCulledCasters(),
-                        pointShadowRenderer->getSlotsRegenerated());
+            constexpr Uint64 ReadoutIntervalMs = 250;
+            if (const Uint64 now = SDL_GetTicks(); now - debugReadout.sampledMs >= ReadoutIntervalMs) {
+                debugReadout.sampledMs = now;
+                debugReadout.drawCalls = drawCallsLastFrame;
+                debugReadout.shadowLights = pointShadowRenderer->getActiveLights();
+                debugReadout.shadowDraws = pointShadowRenderer->getCasterDraws();
+                debugReadout.shadowCulled = pointShadowRenderer->getCulledCasters();
+                debugReadout.shadowRegen = pointShadowRenderer->getSlotsRegenerated();
+            }
+
+            ImGui::Text("Application average %6.3f ms/frame (%5.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+            ImGui::Text("Draw Calls Last Frame %5d", debugReadout.drawCalls);
+            ImGui::Text("Point Shadows: %2d lights, %5d draws, %4d culled, %2d regen",
+                        debugReadout.shadowLights, debugReadout.shadowDraws,
+                        debugReadout.shadowCulled, debugReadout.shadowRegen);
 
             // Let the app add its own sections to the debug window (e.g. multiplayer status).
             if (app != nullptr) app->debugUI();

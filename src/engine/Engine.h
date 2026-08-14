@@ -266,6 +266,16 @@ namespace ytail {
         int framerateLock = 0;
         int drawCallsLastFrame = 0;
 
+        struct DebugReadout {
+            Uint64 sampledMs = 0;
+            int drawCalls = 0;
+            int shadowLights = 0;
+            int shadowDraws = 0;
+            int shadowCulled = 0;
+            int shadowRegen = 0;
+        };
+        DebugReadout debugReadout;
+
         std::string windowTitle = "yellowtail";
 
         // world stuff

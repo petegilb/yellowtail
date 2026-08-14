@@ -36,8 +36,8 @@ namespace ytail::net {
         constexpr ImU32 ResimColor = IM_COL32(150, 145, 245, 255);
         constexpr ImU32 SentColor = IM_COL32(90, 190, 210, 255);
         constexpr ImU32 ReceivedColor = IM_COL32(120, 150, 235, 255);
-        constexpr ImU32 LostColor = IM_COL32(235, 75, 60, 255);
-        constexpr ImU32 StarvedColor = IM_COL32(245, 150, 50, 255);
+        constexpr ImU32 LostColor = IM_COL32(255, 70, 180, 255);
+        constexpr ImU32 StarvedColor = IM_COL32(245, 245, 245, 255);
         constexpr ImU32 AppliedColor = IM_COL32(70, 115, 160, 255);
 
         void drawBar(ImDrawList* draw, const float x, const float bottom, const float laneHeight,

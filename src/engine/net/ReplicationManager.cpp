@@ -321,9 +321,7 @@ namespace ytail::net {
     // client also holds links to its peers now, and the ping to one of those says nothing about the
     // clock. 0 when the backend has no estimate yet.
     Uint64 ReplicationManager::oneWayTicks() const {
-        const std::vector<uint32_t>& connections = peer->getConnections();
-        const uint32_t connection = hostConnection != 0 ? hostConnection
-                                  : (connections.empty() ? 0 : connections.front());
+        const uint32_t connection = peer->getHostConnection();
         if (connection == 0) return 0;
         const int pingMs = peer->getPingMs(connection);
         if (pingMs < 0) return 0;
@@ -870,11 +868,7 @@ namespace ytail::net {
             clients[connection] = state;
             sendWelcome(connection, state.peerId);
             sendPeerRoster();
-        } else if (hostConnection == 0) {
-            // The first connection a client makes is to the host. The rest are other clients dialling
-            // in for input, and those must not be mistaken for a fresh session: resetting here would
-            // throw away the clock and every mapping the moment a second player joined.
-            hostConnection = connection;
+        } else if (connection == peer->getHostConnection()) {
             resetReceivedState();
         }
     }
@@ -930,8 +924,7 @@ namespace ytail::net {
             inputByPeer.erase(departed);
             clients.erase(entry);
             sendPeerRoster();
-        } else if (connection == hostConnection) {
-            hostConnection = 0;
+        } else if (connection == peer->getHostConnection()) {
             resetReceivedState();
         }
     }
@@ -1548,9 +1541,7 @@ namespace ytail::net {
                 if (peer->getStats(connection, candidate) && candidate.pingMs > link.pingMs) link = candidate;
             }
         } else {
-            const uint32_t connection = hostConnection != 0 ? hostConnection
-                                      : (connections.empty() ? 0 : connections.front());
-            peer->getStats(connection, link);
+            peer->getStats(peer->getHostConnection(), link);
         }
         stats.pingMs = link.pingMs;
         stats.lossPct = link.qualityLocal < 0.0f ? -1.0f : (1.0f - link.qualityLocal) * 100.0f;

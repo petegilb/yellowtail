@@ -460,9 +460,6 @@ namespace ytail::net {
         std::unordered_map<uint32_t, ClientSyncState> clients;
 
         uint32_t localPeerId = 0;
-        // Which connection is the host's, so a client can tell it apart from the other clients that
-        // dial in for input. 0 until we have one.
-        uint32_t hostConnection = 0;
         // Peers we have already dialled, so a repeated roster does not open a second connection.
         std::vector<uint64_t> dialledPeers;
 
