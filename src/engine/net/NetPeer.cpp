@@ -16,6 +16,13 @@
 #include "engine/net/INetworkEventHandler.h"
 
 namespace ytail::net {
+    // Peer links live on their own virtual port. Sharing the host's would make a client's outbound
+    // connection to the host and an inbound link from another client indistinguishable, and Steam
+    // does not merge those without SymmetricConnect: the client ends up connected twice, gets two
+    // peer ids and two balls, and drives neither. The local transport is immune because every
+    // instance already listens on its own IP port.
+    constexpr int PeerVirtualPort = 1;
+
     // The backend's status callback is a plain function pointer, so it reaches the active peer through
     // this file-static pointer. There is one networking peer per process.
     static NetPeer* activePeer = nullptr;
@@ -92,6 +99,10 @@ namespace ytail::net {
 
     bool NetPeer::startHost() {
         if (sockets == nullptr) return false;
+        if (active) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Already in a session; ignoring %s.", "a second host");
+            return false;
+        }
 
         ensurePollGroup();
         listenSocket = sockets->CreateListenSocketP2P(0, 0, nullptr);
@@ -108,6 +119,10 @@ namespace ytail::net {
 
     bool NetPeer::connectTo(const uint64_t hostSteamId) {
         if (sockets == nullptr) return false;
+        if (active) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Already in a session; ignoring %s.", "a second connect");
+            return false;
+        }
 
         ensurePollGroup();
 
@@ -132,6 +147,10 @@ namespace ytail::net {
 
     bool NetPeer::startHostIP(const uint16_t port) {
         if (sockets == nullptr) return false;
+        if (active) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Already in a session; ignoring %s.", "a second host");
+            return false;
+        }
 
         localTransport = true;
         ensurePollGroup();
@@ -157,6 +176,10 @@ namespace ytail::net {
 
     bool NetPeer::connectToIP(const uint16_t port) {
         if (sockets == nullptr) return false;
+        if (active) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Already in a session; ignoring %s.", "a second connect");
+            return false;
+        }
 
         localTransport = true;
         ensurePollGroup();
@@ -195,7 +218,8 @@ namespace ytail::net {
             address.SetIPv4(0, static_cast<uint16_t>(peerAddress));
             listenSocket = sockets->CreateListenSocketIP(address, optionCount, optionCount > 0 ? &options : nullptr);
         } else {
-            listenSocket = sockets->CreateListenSocketP2P(0, optionCount, optionCount > 0 ? &options : nullptr);
+            listenSocket = sockets->CreateListenSocketP2P(PeerVirtualPort, optionCount,
+                                                          optionCount > 0 ? &options : nullptr);
         }
 
         if (listenSocket == k_HSteamListenSocket_Invalid) {
@@ -223,7 +247,8 @@ namespace ytail::net {
             SteamNetworkingIdentity identity{};
             identity.Clear();
             identity.SetSteamID64(address);
-            connection = sockets->ConnectP2P(identity, 0, optionCount, optionCount > 0 ? &options : nullptr);
+            connection = sockets->ConnectP2P(identity, PeerVirtualPort, optionCount,
+                                             optionCount > 0 ? &options : nullptr);
         }
 
         if (connection == k_HSteamNetConnection_Invalid) {

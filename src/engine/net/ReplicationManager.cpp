@@ -41,6 +41,7 @@ namespace ytail::net {
     // the same moment with two ticks of margin for the hop itself.
     Uint64 ReplicationManager::inputDelayTicks = 4;
     bool ReplicationManager::adaptiveInputDelay = true;
+    bool ReplicationManager::lateInputRollback = true;
     Uint64 ReplicationManager::maxInputDelayTicks = 8;
     // 5cm, well inside a ball and far looser than the 2mm the wire can express. Tight enough that a
     // real divergence is caught, loose enough that solver noise is not mistaken for one.
@@ -416,6 +417,9 @@ namespace ytail::net {
         ImGui::SliderAngle("Prediction angle", &predictionAngleTolerance, 0.0f, 45.0f);
         ImGui::SetItemTooltip("The same, for spin. Checked separately: a ball can hold its position "
                               "while its rotation drifts.");
+        ImGui::Checkbox("Late input rollback", &lateInputRollback);
+        ImGui::SetItemTooltip("Replay a tick when a peer's input for it lands after we guessed. Off "
+                              "to see what it is costing; a press that arrives late is then lost.");
         ImGui::Checkbox("Adaptive input delay", &adaptiveInputDelay);
         ImGui::SetItemTooltip("Follows the round trip. Off to pin it with the slider below.");
         tickSlider("Max input delay", maxInputDelayTicks, 20,
@@ -1168,6 +1172,7 @@ namespace ytail::net {
     // rather than at the offending tick: a few extra steps, against needing a saved body state for
     // every tick to do better.
     void ReplicationManager::replayLateInput() {
+        if (!lateInputRollback) return;
         Uint64 earliest = 0;
         for (auto& [peerId, history] : inputByPeer) {
             if (history.mispredictedTick != 0 && (earliest == 0 || history.mispredictedTick < earliest)) {

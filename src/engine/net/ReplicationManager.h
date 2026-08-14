@@ -301,6 +301,8 @@ namespace ytail::net {
         // short on a bad one. Peers do not have to agree on it: a peer's delay only decides how
         // early its own input reaches everyone else.
         static bool adaptiveInputDelay;
+        // Replay a tick when a peer's real input for it turns up after we already guessed
+        static bool lateInputRollback;
         // Ceiling on that. Past it prediction degrades rather than the controls getting heavier, and
         // what degrades first is only the host's ball: that one costs a round trip, our input out and
         // its input back, while a body predicted over a direct link costs one hop and stays covered.
