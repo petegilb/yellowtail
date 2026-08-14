@@ -42,6 +42,7 @@ namespace ytail::net {
     Uint64 ReplicationManager::inputDelayTicks = 4;
     bool ReplicationManager::adaptiveInputDelay = true;
     bool ReplicationManager::lateInputRollback = true;
+    bool ReplicationManager::peerMesh = true;
     Uint64 ReplicationManager::maxInputDelayTicks = 8;
     // 5cm, well inside a ball and far looser than the 2mm the wire can express. Tight enough that a
     // real divergence is caught, loose enough that solver noise is not mistaken for one.
@@ -1011,6 +1012,7 @@ namespace ytail::net {
     // A peer address is 64 bits over the relay and 16 on the local transport, and there is no
     // 64-bit varint, so it travels as two 32-bit halves.
     void ReplicationManager::sendPeerHello() {
+        if (!peerMesh) return;
         sendWords.resize(SendBufferWords);
         BitWriter writer(sendWords.data(), SendBufferWords);
         writer.writeBits(static_cast<uint32_t>(NetMessageType::PeerHello), 8);
@@ -1056,7 +1058,7 @@ namespace ytail::net {
     }
 
     void ReplicationManager::onPeerRosterMessage(const int size) {
-        if (peer->isHosting()) return;
+        if (peer->isHosting() || !peerMesh) return;
         BitReader reader(receiveWords.data(), size);
         reader.readBits(8);
         const uint32_t count = reader.readVarUInt();

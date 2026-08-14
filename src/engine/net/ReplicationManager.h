@@ -303,6 +303,10 @@ namespace ytail::net {
         static bool adaptiveInputDelay;
         // Replay a tick when a peer's real input for it turns up after we already guessed
         static bool lateInputRollback;
+        // Direct client-to-client links for input. Off falls back to the host relaying everyone's
+        // input, which costs a hop and so a worse prediction of the other players, but takes the
+        // whole peer listen/dial path out of the picture.
+        static bool peerMesh;
         // Ceiling on that. Past it prediction degrades rather than the controls getting heavier, and
         // what degrades first is only the host's ball: that one costs a round trip, our input out and
         // its input back, while a body predicted over a direct link costs one hop and stays covered.
