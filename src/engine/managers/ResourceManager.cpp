@@ -831,6 +831,32 @@ namespace ytail {
             if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
+        // Sky dome: an equirectangular panorama on a camera-centred mesh, drawn after the opaque
+        // geometry so the depth test rejects the pixels that geometry already covered.
+        // vertex   : 1 uniform buffer (SkyCamera @ b0 space1)
+        // fragment : 1 sampler (panorama @ t0 space2) + 1 uniform buffer (Sky @ b0 space3)
+        { // Sky
+            SDL_GPUShader* vs = loadShader(device, "Sky.vert", 0, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "Sky.frag", 1, 1, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load Sky shaders");
+            }
+            else{
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+                // We render from inside the mesh, where its glTF-wound CCW faces read as back-facing,
+                // so culling the front ones leaves exactly the surfaces we see.
+                builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_FRONT;
+                // Sky.vert pins depth to the far plane. Depth clears to that same value, so the
+                // compare has to accept equality or every sky pixel fails the test.
+                builder.info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+                builder.info.depth_stencil_state.enable_depth_write = false;
+                pipelines[static_cast<size_t>(PipelineType::Sky)] = createPipeline(device, builder, "Sky");
+            }
+
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
+        }
+
         // Shadow pass: scene depth from the sun's POV into a depth-only target. Reuses the Mesh
         // layout (position only); the fragment shader is a no-op.
         // vertex   : 1 uniform buffer (LightMVP @ b0 space1 = lightViewProj * model)

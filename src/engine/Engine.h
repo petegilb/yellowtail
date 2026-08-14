@@ -30,6 +30,8 @@ namespace ytail {
     class DebugLineRenderer;
     class BillboardRenderer;
     class PointShadowRenderer;
+    class Mesh;
+    class Texture;
 
     class Engine {
     public:
@@ -165,11 +167,21 @@ namespace ytail {
         [[nodiscard]] bool screenPointToRay(float screenX, float screenY,
                                             glm::vec3& outOrigin, glm::vec3& outDir) const;
 
+        // Background the color target clears to, behind everything including the sky.
+        [[nodiscard]] glm::vec3 getClearColor() const { return { clear_color.x, clear_color.y, clear_color.z }; }
+        void setClearColor(const glm::vec3& color) { clear_color = ImVec4(color.x, color.y, color.z, 1.0f); }
+
         // Scene ambient light: the shader uses color * intensity.
         [[nodiscard]] glm::vec3 getAmbientColor() const { return { ambientDebug.x, ambientDebug.y, ambientDebug.z }; }
         void setAmbientColor(const glm::vec3& color) { ambientDebug = ImVec4(color.x, color.y, color.z, 1.0f); }
         [[nodiscard]] float getAmbientIntensity() const { return ambientIntensity; }
         void setAmbientIntensity(float intensity) { ambientIntensity = intensity; }
+
+        // Sky dome panorama, an assets-relative path to an equirectangular (2:1) image.
+        // Empty means no sky is drawn. The load is deferred to the next frame, so this is safe
+        // to call before run() has built the ResourceManager.
+        void setSkyTexture(const std::string& assetPath);
+        [[nodiscard]] const std::string& getSkyTexture() const { return skyTexturePath; }
 
         // Builds components by serial id when loading a scene.
         [[nodiscard]] const ComponentRegistry& getComponentRegistry() const { return componentRegistry; }
@@ -208,6 +220,11 @@ namespace ytail {
         float pointShadowSlope = 0.0f; // bias slope (× (1 - NdotL))
         float pointShadowDiskRadius = 0.0032f; // PCF softness (× distance)
         int pointShadowBudget = 4; // max cube slots re-rendered per frame (rest cached)
+
+        // Sky dome, drawn only when a panorama has been set (see setSkyTexture).
+        bool showSky = true;
+        glm::vec3 skyTint{1.0f}; // multiplied over the panorama, for time-of-day shifts
+        float skyYaw = 0.0f; // radians, rotates the sky around Y
     protected:
         SDL_Window* window = nullptr;
         bool bRunning = true;
@@ -233,6 +250,15 @@ namespace ytail {
 
         // Light-space view*proj for the first directional shadow caster. False if none casts.
         [[nodiscard]] bool computeSunLightMatrix(glm::mat4& outLightViewProj) const;
+
+        // Sky panorama + the mesh it's drawn on. Loaded on first use by ensureSkyResources so
+        // setSkyTexture works before the ResourceManager exists, and outside the render pass
+        // because getTexture submits its own upload command buffer.
+        std::string skyTexturePath;
+        std::string skyTextureAttempted; // last path we tried, so a missing file logs once
+        std::shared_ptr<Texture> skyTexture;
+        std::shared_ptr<Mesh> skyMesh;
+        void ensureSkyResources();
 
         // Recorded so a present-mode change re-applies the same composition
         SDL_GPUSwapchainComposition swapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR;

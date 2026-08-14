@@ -135,8 +135,9 @@ namespace ytail::physics {
         void saveContacts(int slot);
         bool restoreContacts(int slot);
 
-        // generate debug wireframe so we can draw it in the renderer
-        void debugDraw();
+        // Generate debug wireframe so we can draw it in the renderer. The camera position picks
+        // each body's LOD, so pass the one the frame is being rendered from.
+        void debugDraw(const glm::vec3& cameraPosition);
         [[nodiscard]] const std::vector<JoltDebugVertex>& getDebugLines() const;
 
         PhysicsManager(const PhysicsManager&) = delete;

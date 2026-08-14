@@ -63,6 +63,8 @@ namespace ytail {
         gizmoLineRenderer.reset();
         billboardRenderer.reset();
         pointShadowRenderer.reset();
+        skyMesh.reset();
+        skyTexture.reset();
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
         if (device && depthTexture) SDL_ReleaseGPUTexture(device, depthTexture);
         if (device && sceneColorTexture) SDL_ReleaseGPUTexture(device, sceneColorTexture);
@@ -375,6 +377,29 @@ namespace ytail {
         return true;
     }
 
+    void Engine::setSkyTexture(const std::string& assetPath) {
+        if (skyTexturePath == assetPath) return;
+        skyTexturePath = assetPath;
+        skyTexture.reset();
+    }
+
+    void Engine::ensureSkyResources() {
+        if (skyTexturePath.empty() || skyTexturePath == skyTextureAttempted) return;
+        skyTextureAttempted = skyTexturePath;
+
+        // sRGB: a painted sky is authored in gamma space, so it has to be linearized before the
+        // tint multiply, the same as any albedo map.
+        skyTexture = resourceManager->getTexture(skyTexturePath, true);
+        if (!skyTexture) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load sky texture: %s",
+                         skyTexturePath.c_str());
+            return;
+        }
+        // A cube is enough: Sky.frag derives the panorama lookup from the interpolated direction,
+        // so the dome needs no more than the 12 triangles that enclose the camera.
+        if (!skyMesh) skyMesh = resourceManager->getMesh("primitive:cube");
+    }
+
     void Engine::getRenderTargetSize(int& outWidth, int& outHeight) const {
         int pw, ph;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
@@ -602,6 +627,8 @@ namespace ytail {
         }
         ensureSceneColorTexture(w, h);
         ensureDepthTexture(w, h);
+        // Before the command buffer below: loading a texture runs its own upload command buffer.
+        ensureSkyResources();
 
         // command buffer of commands to be executed by SDL3_gpu
         // does not need to be freed and can only be used on the thread in which it is created (render thread?)
@@ -643,7 +670,7 @@ namespace ytail {
         // Physics debug wireframe: regenerate the geometry and stage it. The upload runs a copy
         // pass, so like ImGui it has to happen before BeginRenderPass.
         if (showPhysicsShapes && debugLineRenderer) {
-            physics::PhysicsManager::get().debugDraw();
+            physics::PhysicsManager::get().debugDraw(camXform->getPosition());
             debugLineRenderer->upload(commandBuffer, physics::PhysicsManager::get().getDebugLines());
         }
 
@@ -872,6 +899,42 @@ namespace ytail {
                 drawCallsLastFrame++;
             }
         });
+
+        // Sky dome. Runs after the lit draws for two reasons: opaque geometry has already filled
+        // depth, so the sky only shades the pixels nothing covered, and Sky.frag uses fragment
+        // slot 0 for its own uniform and sampler, which would otherwise clobber FrameLighting and
+        // the diffuse binding the lit draws depend on.
+        SDL_GPUGraphicsPipeline* skyPipeline = resourceManager->getPipeline(PipelineType::Sky);
+        if (showSky && skyPipeline && skyMesh && skyTexture) {
+            SDL_BindGPUGraphicsPipeline(renderPass, skyPipeline);
+
+            SDL_GPUBufferBinding vertexBinding { .buffer = skyMesh->vertexBuffer, .offset = 0 };
+            SDL_GPUBufferBinding indexBinding { .buffer = skyMesh->indexBuffer, .offset = 0 };
+            SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
+            SDL_BindGPUIndexBuffer(renderPass, &indexBinding, skyMesh->indexSize);
+
+            // Rotation only: dropping the view translation pins the dome to the camera, so it
+            // reads as infinitely far away instead of as a box the player can walk into.
+            const glm::mat4 skyViewProj = projection * glm::mat4(glm::mat3(view));
+            SDL_PushGPUVertexUniformData(commandBuffer, 0, &skyViewProj, sizeof(skyViewProj));
+
+            const SkyUniform skyUniform{ skyTint, skyYaw };
+            SDL_PushGPUFragmentUniformData(commandBuffer, 0, &skyUniform, sizeof(skyUniform));
+
+            // Wrapping sampler: the panorama's left and right edges meet at the seam behind the
+            // camera, so they have to blend into each other rather than clamp.
+            SDL_GPUTextureSamplerBinding skyBinding{
+                .texture = skyTexture->handle(),
+                .sampler = resourceManager->getSampler(SamplerType::LinearWrap)
+            };
+            SDL_BindGPUFragmentSamplers(renderPass, 0, &skyBinding, 1);
+
+            for (const Submesh& submesh : skyMesh->submeshes) {
+                SDL_DrawGPUIndexedPrimitives(renderPass, submesh.indexCount, 1,
+                    submesh.indexOffset, 0, 0);
+                drawCallsLastFrame++;
+            }
+        }
 
         // Outline pass: for each outlined object, draw a slightly scaled shell in a flat color.
         // The stencil test (NOT_EQUAL 1) in the Outline pipeline clips it to the ring just outside
@@ -1150,7 +1213,6 @@ namespace ytail {
 #if YELLOWTAIL_WITH_NETWORKING
             replication.drawNetGraphControls();
 #endif
-            ImGui::ColorEdit3("Clear Color", reinterpret_cast<float*>(&clear_color));
             ImGui::SliderInt("FPS Lock", &framerateLock, -1, 999);
 
             if (ImGui::CollapsingHeader("Display")) {
@@ -1239,8 +1301,6 @@ namespace ytail {
 
             ImGui::Checkbox("Show Physics Shapes", &showPhysicsShapes);
 
-            ImGui::ColorEdit3("Ambient Light", (float*)&ambientDebug);
-            ImGui::SliderFloat("Ambient Intensity", &ambientIntensity, 0.0f, 10.0f);
             constexpr Uint64 ReadoutIntervalMs = 250;
             if (const Uint64 now = SDL_GetTicks(); now - debugReadout.sampledMs >= ReadoutIntervalMs) {
                 debugReadout.sampledMs = now;

@@ -494,8 +494,9 @@ namespace ytail::physics {
         return true;
     }
 
-    void PhysicsManager::debugDraw() {
+    void PhysicsManager::debugDraw(const glm::vec3& cameraPosition) {
         impl->debugRenderer.clear();
+        impl->debugRenderer.SetCameraPos(RVec3(cameraPosition.x, cameraPosition.y, cameraPosition.z));
 
         BodyManager::DrawSettings settings;
         settings.mDrawShape = true;

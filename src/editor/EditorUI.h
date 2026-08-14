@@ -115,6 +115,9 @@ namespace ytail {
         float snapRotateDegrees = 15.0f;
         float snapScale = 0.1f;
 
+        // World menu's sky path box. Seeded from the engine when the menu opens, applied on Enter.
+        std::string skyTextureInput;
+
         // Material editor window state
         bool showMaterialEditor = false;
         MaterialDef materialDef;

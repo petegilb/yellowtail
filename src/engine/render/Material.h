@@ -24,6 +24,7 @@ namespace ytail {
         DebugLine,
         Grid,
         Billboard,
+        Sky,
         ShadowDepth,
         PointShadowDepth,
         Count

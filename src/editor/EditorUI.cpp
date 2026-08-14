@@ -751,6 +751,50 @@ namespace ytail
             ImGui::EndPopup();
         }
 
+        // World dropdown: the per-scene settings, saved with the scene rather than the editor.
+        ImGui::SameLine(0.0f, 20.0f);
+        // Not "World": the gizmo space checkbox above already owns that label, and ImGui derives
+        // widget ids from the label, so two of them in this window collide.
+        if (ImGui::Button("World Settings")) {
+            // Seed the path box on open so it always shows what the loaded scene asked for.
+            skyTextureInput = engine->getSkyTexture();
+            ImGui::OpenPopup("WorldMenu");
+        }
+        if (ImGui::BeginPopup("WorldMenu")) {
+            ImGui::SeparatorText("Background");
+            glm::vec3 clearColor = engine->getClearColor();
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::ColorEdit3("Clear Color", &clearColor.x)) engine->setClearColor(clearColor);
+
+            ImGui::SeparatorText("Ambient Light");
+            glm::vec3 ambientColor = engine->getAmbientColor();
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::ColorEdit3("Color", &ambientColor.x)) engine->setAmbientColor(ambientColor);
+            float ambientIntensity = engine->getAmbientIntensity();
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::SliderFloat("Intensity", &ambientIntensity, 0.0f, 10.0f)) {
+                engine->setAmbientIntensity(ambientIntensity);
+            }
+
+            ImGui::SeparatorText("Sky");
+            // Assets-relative path to an equirectangular (2:1) panorama, applied on Enter so a
+            // half-typed path never reaches the loader. Clear it and press Enter for no sky.
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::InputText("Texture", &skyTextureInput, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                engine->setSkyTexture(skyTextureInput);
+            }
+            if (engine->getSkyTexture().empty()) {
+                ImGui::TextDisabled("No sky in this scene");
+            } else {
+                ImGui::Checkbox("Show Sky", &engine->showSky);
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::ColorEdit3("Tint", &engine->skyTint.x);
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::SliderAngle("Yaw", &engine->skyYaw);
+            }
+            ImGui::EndPopup();
+        }
+
         ImGui::SameLine(0.0f, 20.0f);
         if (ImGui::Button("Material Editor")) showMaterialEditor = !showMaterialEditor;
         ImGui::End();

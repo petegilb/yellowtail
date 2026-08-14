@@ -60,6 +60,14 @@ namespace ytail {
     };
     static_assert(sizeof(ShadowUniform) == 96, "ShadowUniform must match the b2 cbuffer layout");
 
+    // Mirrors cbuffer Sky in Sky.frag.hlsl (b0, space3). HLSL packs the vec3 and the trailing
+    // float into one 16-byte row, so no padding is needed here.
+    struct SkyUniform {
+        glm::vec3 tint{1.0f}; // multiplied over the panorama, for time-of-day shifts
+        float yaw = 0.0f; // radians, rotates the sky around Y
+    };
+    static_assert(sizeof(SkyUniform) == 16, "SkyUniform must match the b0 cbuffer layout");
+
     class RenderComponent : public Component {
 public:
         std::vector<std::shared_ptr<Material>> materials;

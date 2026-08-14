@@ -23,6 +23,7 @@ namespace ytail {
         { PipelineType::DebugLine,        "DebugLine" },
         { PipelineType::Grid,             "Grid" },
         { PipelineType::Billboard,        "Billboard" },
+        { PipelineType::Sky,              "Sky" },
     })
 
     NLOHMANN_JSON_SERIALIZE_ENUM(SamplerType, {

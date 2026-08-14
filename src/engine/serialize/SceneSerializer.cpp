@@ -25,8 +25,12 @@ namespace ytail {
     nlohmann::json saveSceneToJson(Engine& engine) {
         nlohmann::json root;
         root["version"] = SCENE_VERSION;
+        root["clearColor"] = engine.getClearColor();
         root["ambientColor"] = engine.getAmbientColor();
         root["ambientIntensity"] = engine.getAmbientIntensity();
+        root["skyTexture"] = engine.getSkyTexture();
+        root["skyTint"] = engine.skyTint;
+        root["skyYaw"] = engine.skyYaw;
 
         World& world = engine.getWorld();
         const ComponentRegistry& registry = engine.getComponentRegistry();
@@ -64,8 +68,14 @@ namespace ytail {
         engine.clearScene();
 
         const int version = root.value("version", 1);
+        // Scenes written before clearColor existed fall back to the engine's original background.
+        engine.setClearColor(root.value("clearColor", glm::vec3(0.45f, 0.55f, 0.60f)));
         engine.setAmbientColor(root.value("ambientColor", glm::vec3(0.0f)));
         engine.setAmbientIntensity(root.value("ambientIntensity", 1.0f));
+        // Empty path means the scene has no sky, which is what older scene files deserialize to.
+        engine.setSkyTexture(root.value("skyTexture", std::string()));
+        engine.skyTint = root.value("skyTint", glm::vec3(1.0f));
+        engine.skyYaw = root.value("skyYaw", 0.0f);
 
         if (!root.contains("entities")) return;
         const auto& entitiesJson = root.at("entities");
