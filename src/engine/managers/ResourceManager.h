@@ -25,6 +25,9 @@ public:
             for (auto* p : pipelines) {
                 if (p) SDL_ReleaseGPUGraphicsPipeline(device, p);
             }
+            for (auto* p : computePipelines) {
+                if (p) SDL_ReleaseGPUComputePipeline(device, p);
+            }
         }
         // get or load the texture at the specified path.
         // srgb=true for color textures (albedo/diffuse) so the GPU does gamma-correct
@@ -46,6 +49,12 @@ public:
         // swapped for their stencil-stamping variant so the outline pass has a silhouette to mask.
         SDL_GPUGraphicsPipeline* getPipeline(PipelineType type, bool outline = false);
 
+        // Nullptr if the shader failed to compile, so callers skip the dispatch rather than
+        // binding null.
+        [[nodiscard]] SDL_GPUComputePipeline* getComputePipeline(ComputePipelineType type) const {
+            return computePipelines[static_cast<size_t>(type)];
+        }
+
         [[nodiscard]] SDL_GPUSampler* getSampler(SamplerType type) const {
             return samplers[static_cast<size_t>(type)];
         }
@@ -56,6 +65,12 @@ public:
 
         // Sampleable depth format for the shadow map (rendered to, then sampled by the lit shader).
         [[nodiscard]] SDL_GPUTextureFormat getShadowMapFormat() const { return shadowMapFormat; }
+
+        // Create the GPU buffers for a mesh, upload the geometry, and build the Mesh. Public so
+        // subsystems that generate their own geometry (the ocean clipmap) can share the upload
+        // path instead of duplicating it. Not cached: the caller owns what comes back.
+        std::shared_ptr<Mesh> uploadMesh(const std::string& name, const std::vector<Vertex>& vertices,
+                                         const std::vector<Uint32>& indices, std::vector<Submesh> submeshes);
 
         // Absolute path to read from: the source tree when it has the file, else next to the exe.
         [[nodiscard]] std::string resolveAssetPath(const std::string& path) const;
@@ -89,6 +104,8 @@ public:
         // all pipelines that exist currently : {} zero-inits to nullptr
         std::array<SDL_GPUGraphicsPipeline*, static_cast<size_t>(PipelineType::Count)> pipelines{};
 
+        std::array<SDL_GPUComputePipeline*, static_cast<size_t>(ComputePipelineType::Count)> computePipelines{};
+
         // load a shader for a pipeline. this exists as a private helper for getPipeline since
         // an SDL_GPUShader is only needed while building the pipeline and should be released
         // right after SDL_CreateGPUGraphicsPipeline()
@@ -101,13 +118,16 @@ public:
             Uint32 storageTextureCount
         );
 
-        // Create the GPU buffers for a mesh, upload the geometry, and build the Mesh 
-        std::shared_ptr<Mesh> uploadMesh(const std::string& name, const std::vector<Vertex>& vertices,
-                                         const std::vector<Uint32>& indices, std::vector<Submesh> submeshes);
         // Build and cache a "primitive:<shape>" mesh (cube/sphere/plane).
         std::shared_ptr<Mesh> loadPrimitiveMesh(const std::string& path);
 
+        // Build a compute pipeline from "assets/shaders/<shaderName>.comp.hlsl". Unlike the graphics
+        // path there is no resource count to pass: shadercross reflects the bindings and the thread
+        // group size out of the SPIR-V.
+        SDL_GPUComputePipeline* loadComputePipeline(const char* shaderName);
+
         void initializePipelines();
+        void initializeComputePipelines();
         void initializeSamplers();
     };
 } // ytail

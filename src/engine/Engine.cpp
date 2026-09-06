@@ -29,7 +29,9 @@
 #include "components/CameraComponent.h"
 #include "components/LightComponent.h"
 #include "components/NetworkComponent.h"
+#include "components/OceanComponent.h"
 #include "managers/ResourceManager.h"
+#include "ocean/OceanRenderer.h"
 
 namespace ytail {
     Engine::Engine() {
@@ -63,6 +65,9 @@ namespace ytail {
         gizmoLineRenderer.reset();
         billboardRenderer.reset();
         pointShadowRenderer.reset();
+        // Holds textures and the clipmap's buffers, and being a member it would otherwise be
+        // destroyed after this body runs, which is after the device below is gone.
+        oceanRenderer.reset();
         skyMesh.reset();
         skyTexture.reset();
         resourceManager.reset(); // frees pipelines, samplers, and cached meshes/textures
@@ -132,6 +137,7 @@ namespace ytail {
         gizmoLineRenderer = std::make_unique<DebugLineRenderer>(device);
         billboardRenderer = std::make_unique<BillboardRenderer>(device);
         pointShadowRenderer = std::make_unique<PointShadowRenderer>(device, resourceManager.get());
+        oceanRenderer = std::make_unique<OceanRenderer>(device, resourceManager.get());
         initializeImGui();
 
         // set app icon (SDL_SetWindowIcon copies the surface, so free it right after)
@@ -194,7 +200,12 @@ namespace ytail {
 
     void Engine::tick(float deltaTime) {
         ZoneScoped;
+        lastFrameDelta = deltaTime;
         eventTick();
+
+        // Before the fixed steps, because buoyancy samples the wave field during them and an edit
+        // made this frame has to have reached the sampler by then.
+        syncSceneOcean();
 
         // see https://www.gafferongames.com/post/fix_your_timestep/
 
@@ -299,6 +310,19 @@ namespace ytail {
                 default: ;
             }
         }
+    }
+
+    void Engine::syncSceneOcean() {
+        ZoneScoped;
+        // One ocean per scene. It is global and infinite, so a second would not be a second body of
+        // water, just an argument over the same one.
+        const OceanComponent* sceneOcean = nullptr;
+        world.each<OceanComponent>([&](const EntityId, const OceanComponent& component) {
+            if (sceneOcean == nullptr) sceneOcean = &component;
+        });
+
+        oceanPresent = sceneOcean != nullptr;
+        if (oceanPresent) oceanSimulation.setSettings(sceneOcean->settings);
     }
 
     void Engine::updateTick() {
@@ -747,6 +771,30 @@ namespace ytail {
             pointShadowRenderer->reset(); // clear stale slots + stats so nothing samples last frame's cube
         }
 
+        // Ocean simulation: FFT compute passes for this frame's wave field. Before
+        // BeginGPURenderPass because a compute pass cannot be nested inside a render pass.
+        //
+        // The time it evaluates at is the tick number plus the render alpha, which is the same
+        // continuous function OceanSimulation samples on the CPU. The drawn surface and the one
+        // physics feels therefore coincide exactly at every tick boundary and interpolate between
+        // them in step, rather than being two oceans that happen to look alike.
+        if (oceanPresent && oceanRenderer) {
+            // Resolved for this tick, so the weather being drawn is the weather the sampler is
+            // answering with rather than two independent readings of the same schedule.
+            const ocean::OceanSettings oceanSettings = oceanSimulation.settingsForTick(tickNumber);
+
+            // Wrapped into the loop period the spectrum is quantized to, so a session running for
+            // hours evaluates the same small times a fresh one does instead of losing phase
+            // precision as the number grows.
+            const float loopPeriod = std::max(oceanSettings.spectrum.loopPeriod, 1e-3f);
+            const auto seconds = (static_cast<double>(tickNumber) + alpha) * FIXED_DT
+                               * oceanSettings.spectrum.timeScale;
+            const auto oceanTime = static_cast<float>(std::fmod(seconds, loopPeriod));
+            // Foam accumulation is the only thing that runs on wall-clock time: it is decoration,
+            // and nothing samples it back.
+            oceanRenderer->simulate(commandBuffer, oceanSettings, oceanTime, lastFrameDelta);
+        }
+
         // Depth+stencil attachment for the geometry pass. Depth clears to the far plane (1.0);
         // stencil clears to 0. Neither is needed after the frame, so we don't store them.
         // https://github.com/TheSpydog/SDL_gpu_examples/blob/main/Examples/DepthArray.c
@@ -899,6 +947,34 @@ namespace ytail {
                 drawCallsLastFrame++;
             }
         });
+
+        // Ocean. After the lit draws for the same reason the sky is: it uses fragment slot 0 for
+        // its own uniform and samplers, which would clobber FrameLighting and the diffuse binding
+        // the lit pass depends on. Before the sky, so the sky's depth-equal test still rejects the
+        // pixels the water covered.
+        if (oceanPresent && oceanRenderer && skyTexture) {
+            // The first directional light is the sun, matching how the shadow map picks its
+            // caster. Nothing else in the scene lights water usefully.
+            glm::vec3 sunDirection{0.0f, -1.0f, 0.0f};
+            glm::vec3 sunColor{1.0f};
+            float sunIntensity = 1.0f;
+            for (const SceneLight& sceneLight : sceneLights) {
+                if (sceneLight.light->type != LightType::Directional) continue;
+                sunDirection = glm::normalize(sceneLight.transform->getRotation()
+                                              * glm::vec3(0.0f, 0.0f, -1.0f));
+                sunColor = sceneLight.light->color;
+                sunIntensity = sceneLight.light->intensity;
+                break;
+            }
+
+            // World position, not the local one: the clipmap centres on the camera, and a camera
+            // parented to a moving ship would otherwise centre it on the ship's origin.
+            const glm::vec3 cameraWorldPosition{ camXform->worldMatrix()[3] };
+            oceanRenderer->draw(renderPass, commandBuffer, oceanSimulation.settingsForTick(tickNumber),
+                                view, projection, cameraWorldPosition, sunDirection, sunColor,
+                                sunIntensity, skyTexture->handle(), skyTint, skyYaw);
+            drawCallsLastFrame++;
+        }
 
         // Sky dome. Runs after the lit draws for two reasons: opaque geometry has already filled
         // depth, so the sky only shades the pixels nothing covered, and Sky.frag uses fragment

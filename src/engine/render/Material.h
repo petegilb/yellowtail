@@ -27,6 +27,17 @@ namespace ytail {
         Sky,
         ShadowDepth,
         PointShadowDepth,
+        Ocean,
+        Count
+    };
+
+    // Compute pipelines, built once alongside the graphics ones. Each maps to a
+    // "<name>.comp.hlsl" in assets/shaders; the enumerator name is the file name.
+    enum class ComputePipelineType {
+        OceanInitialSpectrum,
+        OceanTimeEvolve,
+        OceanIFFT,
+        OceanDerivatives,
         Count
     };
 

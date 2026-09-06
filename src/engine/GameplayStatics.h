@@ -17,6 +17,7 @@ namespace ytail {
     class Engine;
     class World;
     namespace net { class ReplicationManager; }
+    namespace ocean { class OceanSimulation; }
 
     enum class PlayState : uint8_t { Paused, Simulating };
 
@@ -30,7 +31,15 @@ namespace ytail {
         [[nodiscard]] static World* getWorld();
 
         // Fixed steps run so far. Components need it to tag input and state by tick.
+        //
+        // During a network rollback this reports the tick being replayed, not the one we have
+        // really reached, which is what lets anything keyed off it replay correctly.
         [[nodiscard]] static Uint64 getTickNumber();
+
+        // The wave field, for buoyancy and anything else asking where the water is. Nullptr when
+        // the scene has no ocean, which is the signal that there is no water here at all rather
+        // than water at height zero.
+        [[nodiscard]] static ocean::OceanSimulation* getOcean();
 
 #if YELLOWTAIL_WITH_NETWORKING
         // Nullptr before the engine exists. Bound to a peer only while a session is running, so

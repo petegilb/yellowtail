@@ -38,6 +38,7 @@ namespace ytail {
 
         initializeSamplers();
         initializePipelines();
+        initializeComputePipelines();
     }
 
     std::string ResourceManager::resolveAssetPath(const std::string& path) const {
@@ -476,6 +477,41 @@ namespace ytail {
         return pipelines[static_cast<size_t>(type)];
     }
 
+    // Read assets/shaders/<shaderFilename>.hlsl and run it through DXC. The caller owns the
+    // returned buffer and frees it with SDL_free. Shared by the graphics and compute paths, which
+    // differ only in what they hand the SPIR-V to afterwards.
+    static void* compileShaderToSpirv(const char* basePath, const char* shaderFilename,
+                                      SDL_ShaderCross_ShaderStage stage, size_t& outSize) {
+        // std::string, not a fixed buffer: a long install path would silently truncate.
+        const std::string fullPath = std::string(basePath) + "assets/shaders/" + shaderFilename + ".hlsl";
+
+        size_t codeSize;
+        void* code = SDL_LoadFile(fullPath.c_str(), &codeSize);
+        if (code == nullptr)
+        {
+            SDL_Log("Failed to load shader from disk! %s", fullPath.c_str());
+            return nullptr;
+        }
+
+        // SDL_LoadFile null-terminates, so it's a valid C string.
+        SDL_ShaderCross_HLSL_Info hlslInfo = {};
+        hlslInfo.source = (const char *)code;
+        hlslInfo.entrypoint = "main";
+        hlslInfo.shader_stage = stage;
+        // Lets shaders #include shared .hlsli headers out of the same directory, so maths that has
+        // to agree between several shaders is written once.
+        const std::string includeDir = std::string(basePath) + "assets/shaders";
+        hlslInfo.include_dir = includeDir.c_str();
+
+        void* spirv = SDL_ShaderCross_CompileSPIRVFromHLSL(&hlslInfo, &outSize);
+        SDL_free(code);
+        if (spirv == nullptr)
+        {
+            SDL_Log("Failed to compile %s to SPIR-V: %s", shaderFilename, SDL_GetError());
+        }
+        return spirv;
+    }
+
     SDL_GPUShader * ResourceManager::loadShader(SDL_GPUDevice *inDevice, const char *shaderFilename,
         Uint32 samplerCount, Uint32 uniformBufferCount, Uint32 storageBufferCount, Uint32 storageTextureCount) {
         // We ship HLSL source and cross-compile to the backend's format at runtime
@@ -496,31 +532,10 @@ namespace ytail {
             return nullptr;
         }
 
-        // std::string, not a fixed buffer: a long install path would silently truncate.
-        const std::string fullPath = std::string(BasePath) + "assets/shaders/" + shaderFilename + ".hlsl";
-
-        size_t codeSize;
-        void* code = SDL_LoadFile(fullPath.c_str(), &codeSize);
-        if (code == nullptr)
-        {
-            SDL_Log("Failed to load shader from disk! %s", fullPath.c_str());
-            return nullptr;
-        }
-
-        // 1) HLSL -> SPIR-V (DXC). SDL_LoadFile null-terminates, so it's a valid C string.
-        SDL_ShaderCross_HLSL_Info hlslInfo = {};
-        hlslInfo.source = (const char *)code;
-        hlslInfo.entrypoint = "main";
-        hlslInfo.shader_stage = stage;
-
-        size_t spirvSize;
-        void* spirv = SDL_ShaderCross_CompileSPIRVFromHLSL(&hlslInfo, &spirvSize);
-        SDL_free(code);
-        if (spirv == nullptr)
-        {
-            SDL_Log("Failed to compile HLSL to SPIR-V: %s", SDL_GetError());
-            return nullptr;
-        }
+        // 1) HLSL -> SPIR-V (DXC).
+        size_t spirvSize = 0;
+        void* spirv = compileShaderToSpirv(BasePath, shaderFilename, stage, spirvSize);
+        if (spirv == nullptr) return nullptr;
 
         // 2) SPIR-V -> native SDL_GPUShader (transpiles to MSL/DXIL/SPIRV for this device).
         SDL_ShaderCross_SPIRV_Info spirvInfo = {};
@@ -545,6 +560,60 @@ namespace ytail {
         }
 
         return shader;
+    }
+
+    SDL_GPUComputePipeline* ResourceManager::loadComputePipeline(const char* shaderName) {
+        const std::string filename = std::string(shaderName) + ".comp";
+
+        size_t spirvSize = 0;
+        void* spirv = compileShaderToSpirv(BasePath, filename.c_str(),
+                                           SDL_SHADERCROSS_SHADERSTAGE_COMPUTE, spirvSize);
+        if (spirv == nullptr) return nullptr;
+
+        // Reflection reads the binding counts and the numthreads declaration straight out of the
+        // SPIR-V, so a shader's resources can change without a matching edit here.
+        SDL_ShaderCross_ComputePipelineMetadata* metadata =
+            SDL_ShaderCross_ReflectComputeSPIRV(static_cast<const Uint8*>(spirv), spirvSize, 0);
+        if (metadata == nullptr) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to reflect compute shader %s: %s",
+                         shaderName, SDL_GetError());
+            SDL_free(spirv);
+            return nullptr;
+        }
+
+        SDL_ShaderCross_SPIRV_Info spirvInfo = {};
+        spirvInfo.bytecode = static_cast<const Uint8*>(spirv);
+        spirvInfo.bytecode_size = spirvSize;
+        spirvInfo.entrypoint = "main";
+        spirvInfo.shader_stage = SDL_SHADERCROSS_SHADERSTAGE_COMPUTE;
+
+        SDL_GPUComputePipeline* pipeline =
+            SDL_ShaderCross_CompileComputePipelineFromSPIRV(device, &spirvInfo, metadata, 0);
+        SDL_free(metadata);
+        SDL_free(spirv);
+
+        if (pipeline == nullptr) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create compute pipeline %s: %s",
+                         shaderName, SDL_GetError());
+        }
+        return pipeline;
+    }
+
+    void ResourceManager::initializeComputePipelines() {
+        SDL_Log("initializeComputePipelines");
+        // Enumerator name == shader file name, so the table is the whole mapping.
+        static constexpr struct { ComputePipelineType type; const char* name; } kComputeShaders[] = {
+            { ComputePipelineType::OceanInitialSpectrum, "OceanInitialSpectrum" },
+            { ComputePipelineType::OceanTimeEvolve,      "OceanTimeEvolve" },
+            { ComputePipelineType::OceanIFFT,            "OceanIFFT" },
+            { ComputePipelineType::OceanDerivatives,     "OceanDerivatives" },
+        };
+        static_assert(std::size(kComputeShaders) == static_cast<size_t>(ComputePipelineType::Count),
+                      "every ComputePipelineType needs a shader name here");
+
+        for (const auto& [type, name] : kComputeShaders) {
+            computePipelines[static_cast<size_t>(type)] = loadComputePipeline(name);
+        }
     }
 
     // The two vertex formats our pipelines consume.
@@ -857,6 +926,31 @@ namespace ytail {
             if (fs) SDL_ReleaseGPUShader(device, fs);
         }
 
+        // Ocean clipmap. Reuses the Mesh vertex layout with the channels repurposed: position is
+        // the grid point, normal is the coarser ring's grid point to morph toward, uv carries the
+        // morph weight and the ring level.
+        // vertex   : 1 sampler (displacement array @ t0 space0)
+        //            + 1 uniform buffer (OceanVertex @ b0 space1)
+        // fragment : 3 samplers (derivatives t0, foam t1, sky panorama t2 @ space2)
+        //            + 1 uniform buffer (OceanFragment @ b0 space3)
+        { // Ocean
+            SDL_GPUShader* vs = loadShader(device, "Ocean.vert", 1, 1, 0, 0);
+            SDL_GPUShader* fs = loadShader(device, "Ocean.frag", 3, 1, 0, 0);
+            if (vs == nullptr || fs == nullptr) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load Ocean shaders");
+            }
+            else{
+                PipelineBuilder builder(device, window, vs, fs, VertexLayout::Mesh, depthStencilFormat);
+                // No culling: the camera goes under the surface, and from below the same triangles
+                // face the other way.
+                builder.info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+                pipelines[static_cast<size_t>(PipelineType::Ocean)] = createPipeline(device, builder, "Ocean");
+            }
+
+            if (vs) SDL_ReleaseGPUShader(device, vs);
+            if (fs) SDL_ReleaseGPUShader(device, fs);
+        }
+
         // Shadow pass: scene depth from the sun's POV into a depth-only target. Reuses the Mesh
         // layout (position only); the fragment shader is a no-op.
         // vertex   : 1 uniform buffer (LightMVP @ b0 space1 = lightViewProj * model)
@@ -910,6 +1004,11 @@ namespace ytail {
         // NOTE: fields are assigned (not designated-initialized) so declaration order
         // doesn't matter - in particular max_anisotropy must precede enable_anisotropy.
 
+        // A zero-initialized create info leaves max_lod at 0, which is not "no limit" but a hard
+        // clamp to the top mip: every sampler would silently refuse to use a mip chain. Nothing
+        // noticed while every texture had one level, and the ocean's displacement map has nine.
+        constexpr float kNoLodLimit = 1000.0f;
+
         SDL_GPUSamplerCreateInfo pointClamp = {};
         pointClamp.min_filter = SDL_GPU_FILTER_NEAREST;
         pointClamp.mag_filter = SDL_GPU_FILTER_NEAREST;
@@ -917,6 +1016,7 @@ namespace ytail {
         pointClamp.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
         pointClamp.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
         pointClamp.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        pointClamp.max_lod = kNoLodLimit;
         samplers[static_cast<size_t>(SamplerType::PointClamp)] = SDL_CreateGPUSampler(device, &pointClamp);
 
         SDL_GPUSamplerCreateInfo pointWrap = {};
@@ -926,6 +1026,7 @@ namespace ytail {
         pointWrap.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
         pointWrap.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
         pointWrap.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+        pointWrap.max_lod = kNoLodLimit;
         samplers[static_cast<size_t>(SamplerType::PointWrap)] = SDL_CreateGPUSampler(device, &pointWrap);
 
         SDL_GPUSamplerCreateInfo linearClamp = {};
@@ -935,6 +1036,7 @@ namespace ytail {
         linearClamp.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
         linearClamp.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
         linearClamp.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        linearClamp.max_lod = kNoLodLimit;
         samplers[static_cast<size_t>(SamplerType::LinearClamp)] = SDL_CreateGPUSampler(device, &linearClamp);
 
         SDL_GPUSamplerCreateInfo linearWrap = {};
@@ -944,6 +1046,7 @@ namespace ytail {
         linearWrap.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
         linearWrap.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
         linearWrap.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+        linearWrap.max_lod = kNoLodLimit;
         samplers[static_cast<size_t>(SamplerType::LinearWrap)] = SDL_CreateGPUSampler(device, &linearWrap);
 
         SDL_GPUSamplerCreateInfo anisoClamp = {};
@@ -955,6 +1058,7 @@ namespace ytail {
         anisoClamp.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
         anisoClamp.max_anisotropy = 4;
         anisoClamp.enable_anisotropy = true;
+        anisoClamp.max_lod = kNoLodLimit;
         samplers[static_cast<size_t>(SamplerType::AnisotropicClamp)] = SDL_CreateGPUSampler(device, &anisoClamp);
 
         SDL_GPUSamplerCreateInfo anisoWrap = {};
@@ -966,6 +1070,7 @@ namespace ytail {
         anisoWrap.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
         anisoWrap.max_anisotropy = 4;
         anisoWrap.enable_anisotropy = true;
+        anisoWrap.max_lod = kNoLodLimit;
         samplers[static_cast<size_t>(SamplerType::AnisotropicWrap)] = SDL_CreateGPUSampler(device, &anisoWrap);
 
         // Shadow comparison sampler: linear + compare gives hardware 2x2 PCF; clamp so out-of-
@@ -979,6 +1084,7 @@ namespace ytail {
         shadowPcf.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
         shadowPcf.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
         shadowPcf.enable_compare = true;
+        shadowPcf.max_lod = kNoLodLimit;
         samplers[static_cast<size_t>(SamplerType::ShadowPCF)] = SDL_CreateGPUSampler(device, &shadowPcf);
     }
 } // ytail

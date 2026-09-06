@@ -29,6 +29,12 @@ namespace ytail {
         return engine ? engine->getTickNumber() : 0;
     }
 
+    ocean::OceanSimulation* GameplayStatics::getOcean() {
+        // Null when the scene has no OceanComponent, so buoyancy on a scene with no water floats
+        // nothing rather than floating everything on the default sea.
+        return engine != nullptr && engine->hasOcean() ? &engine->getOcean() : nullptr;
+    }
+
 #if YELLOWTAIL_WITH_NETWORKING
     net::ReplicationManager* GameplayStatics::getReplication() {
         return engine ? &engine->getReplication() : nullptr;

@@ -14,8 +14,10 @@
 #include "imgui.h"
 #include <glm/glm.hpp>
 
+#include "Constants.h"
 #include "World.h"
 #include "GameplayStatics.h"
+#include "ocean/OceanSimulation.h"
 #include "render/BillboardRenderer.h"
 #include "render/DebugDraw.h"
 #include "render/JoltDebugVertex.h"
@@ -30,6 +32,7 @@ namespace ytail {
     class DebugLineRenderer;
     class BillboardRenderer;
     class PointShadowRenderer;
+    class OceanRenderer;
     class Mesh;
     class Texture;
 
@@ -40,7 +43,7 @@ namespace ytail {
 
         // Fixed simulation timestep: 60 steps/sec. Physics + deterministic gameplay run at this rate
         // regardless of render frame rate.
-        static constexpr float FIXED_DT = 1.0f / 60.0f;
+        static constexpr float FIXED_DT = constant::FixedDeltaTime;
 
         // The application (game or editor) the engine drives. Non-owning; set before run().
         void setApplication(Application* inApp) { app = inApp; }
@@ -101,6 +104,12 @@ namespace ytail {
 #if YELLOWTAIL_WITH_NETWORKING
         [[nodiscard]] net::ReplicationManager& getReplication() { return replication; }
 #endif
+
+        // The wave field physics samples. Always constructed; syncSceneOcean feeds it the scene's
+        // OceanComponent, and hasOcean says whether there was one.
+        [[nodiscard]] ocean::OceanSimulation& getOcean() { return oceanSimulation; }
+        // Whether a scene actually has an ocean, so the draw and the buoyancy can be skipped.
+        [[nodiscard]] bool hasOcean() const { return oceanPresent; }
 
         // Create (or resize) the depth+stencil texture to match the given pixel size.
         void ensureDepthTexture(int width, int height);
@@ -251,6 +260,11 @@ namespace ytail {
         // Light-space view*proj for the first directional shadow caster. False if none casts.
         [[nodiscard]] bool computeSunLightMatrix(glm::mat4& outLightViewProj) const;
 
+        // Copy the scene's first OceanComponent into the simulation, so the same settings drive
+        // the CPU sampler and the draw. Runs before the fixed steps: buoyancy reads the sampler
+        // during them, and it has to already hold this frame's settings.
+        void syncSceneOcean();
+
         // Sky panorama + the mesh it's drawn on. Loaded on first use by ensureSkyResources so
         // setSkyTexture works before the ResourceManager exists, and outside the render pass
         // because getTexture submits its own upload command buffer.
@@ -285,6 +299,9 @@ namespace ytail {
         // Fixed-step simulation state. Leftover time carried between frames, the running fixed-step count
         float fixedAccumulator = 0.0f;
         float renderAlpha = 0.0f;
+        // Real seconds the last frame took, for the few things that genuinely run on the wall
+        // clock rather than the tick (foam accumulation, visual smoothing).
+        float lastFrameDelta = 0.0f;
         Uint64 tickNumber = 0;
         PlayState playState = PlayState::Simulating;
 
@@ -337,6 +354,18 @@ namespace ytail {
 
         // Omnidirectional point-light shadows (cube-array depth maps).
         std::unique_ptr<ytail::PointShadowRenderer> pointShadowRenderer;
+
+        // The FFT wave field: compute passes plus the clipmap draw.
+        std::unique_ptr<ytail::OceanRenderer> oceanRenderer;
+
+        // CPU half of the same wave field, sampled by buoyancy and anything else asking where the
+        // water is. A member rather than a pointer because it is cheap when unused and every
+        // caller reaching it through GameplayStatics wants it to always exist.
+        //
+        // Not named `ocean`: that would shadow the ocean namespace inside this class, and the
+        // shadowing would change what `ocean::` meant partway down the header.
+        ocean::OceanSimulation oceanSimulation;
+        bool oceanPresent = false;
 
         // Per-frame scratch, kept as members so clear() retains capacity across frames.
         // having these stops reeallocating the heap each frame
